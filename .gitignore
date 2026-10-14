@@ -7,3 +7,5 @@
 # database
 */data/
 */.env
+*/.env.*
+!*/.env.example

@@ -10,11 +10,18 @@ async function is_auth(req, res, next) {
             return res.status(401).json({ error: 'No token provided' });
         }
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.session = req.session || {};
-    
+        let decoded;
+        try {
+            decoded = jwt.verify(token, process.env.JWT_SECRET);
+        } catch {
+            return res.status(401).json({ error: 'Invalid token' });
+        }
+        if (typeof decoded.token !== 'string') {
+            return res.status(401).json({ error: 'Invalid token' });
+        }
+
         const db_token = await Token.findOne({ token: decoded.token }).populate('user');
-        if (!db_token) {
+        if (!db_token || !db_token.user || db_token.user.deletedAt) {
             return res.status(403).json({ error: 'Invalid token' });
         }
 

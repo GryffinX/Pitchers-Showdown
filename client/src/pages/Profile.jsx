@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import '../styles/Profile.css';
 import background from '../assets/background_profile.png';
 import useAuthStore from '../../lib/store';
+import { API_URL } from '../../lib/config';
 
 
 function logout() {
@@ -12,6 +13,25 @@ function logout() {
 }
 
 
+function InvestmentSection({ title, items, empty }) {
+  return (
+    <section className='investSection' aria-label={title}>
+      <div className='sectionTitle'>{title}</div>
+      {items.length === 0 ? (
+        <div className='emptyState'>{empty}</div>
+      ) : items.map((inv, i) => (
+        <div className='item' key={`${i}-${inv.team}`}>
+          <div className='teamName'>
+            {inv.team || 'Unknown team'}
+            {inv.teamDeleted && <span className='teamRemoved'>removed</span>}
+          </div>
+          <div className='amount'>{inv.amt.toLocaleString()}</div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 export default function Profile() {
   const [profile, setProfile] = useState(null);
   const [error, setError] = useState('');
@@ -19,12 +39,13 @@ export default function Profile() {
   const timerRef = useRef(null);
 
   const token = useAuthStore(state => state.auth.user)
+  const balance = useAuthStore(state => state.balance)
 
   useEffect(() => {
     const controller = new AbortController();
     const fetchProfile = async () => {
       try {
-        const res = await fetch('https://pitchers-showdown-server.onrender.com/api/profile', { 
+        const res = await fetch(`${API_URL}/api/profile`, {
             method: 'GET',
             headers: {'x-access-token': token },
             signal: controller.signal,
@@ -35,9 +56,10 @@ export default function Profile() {
         }
         const data = await res.json();
         setProfile(data);
+        // the server's balance is the source of truth (the login-time value may be stale)
+        if (typeof data.balance === 'number') useAuthStore.getState().setBalance(data.balance);
         setError('');
       } catch (err) {
-        console.log(err);
         if (err.name === 'AbortError') return;
         setError('Could not load profile. Redirecting to login...');
         timerRef.current = setTimeout(() => {
@@ -54,7 +76,7 @@ export default function Profile() {
           clearTimeout(timerRef.current);
       }
     };
-  }, [navigate]);
+  }, [navigate, token]);
 
   if (error) return <div className="profile-error">{error}</div>;
   if (!profile) 
@@ -110,16 +132,22 @@ export default function Profile() {
               Your Investments!
             </div>
             <div className='subheader'> 
-              Remaining Investment Amount: {useAuthStore.getState().balance.toLocaleString()}
+              Remaining Investment Amount: {(profile.balance ?? balance).toLocaleString()}
             </div>
           <div className='listWrap'>
             <div className='list'>
-              {profile.investments.map((inv) => (
-                <div className='item' key={inv.team}>
-                  <div className='teamName'>{inv.team}</div>
-                  <div className='amount'>{inv.amt.toLocaleString()}</div>
-                </div>
-              ))}
+              <InvestmentSection
+                title='Teams you invested in'
+                items={profile.investments}
+                empty="You haven't invested in any teams yet."
+              />
+              {Array.isArray(profile.received) && (
+                <InvestmentSection
+                  title='Investments received'
+                  items={profile.received}
+                  empty='No team has invested in you yet.'
+                />
+              )}
             </div>
           </div>
         </div>

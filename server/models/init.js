@@ -9,9 +9,10 @@ async function init() {
         await mongoose.connect(dbUrl, {
         });
         
-        console.log('Connected to MongoDB');
+        console.log(`Connected to MongoDB (database: ${mongoose.connection.name})`);
     } catch (err) {
-        console.error('Error connecting to MongoDB', err);
+        // Only the message: the full error object can include connection details
+        console.error('Error connecting to MongoDB:', err.message);
         process.exit(1); 
     }
 }

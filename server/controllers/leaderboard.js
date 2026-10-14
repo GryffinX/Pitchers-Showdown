@@ -48,7 +48,7 @@ class ControlBoard {
 
     // full scoreboard generator (IR, PI, score, sorted)
     async getScoreboardWithScores() {
-        const users = await User.find({}).select('_id username name image');
+        const users = await User.find({ deletedAt: null }).select('_id username name image');
 
         // IR = investment received
         const irMap = await this.getInvestmentReceived();

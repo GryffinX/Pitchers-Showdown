@@ -1,27 +1,22 @@
 const PORT = process.env.PORT || 5000;
 
-const express = require('express');
-const cors = require('cors');
-const mongoose = require('mongoose');
+const app = require('./app');
+const connect = require('./models/init');
+const { adminConfig } = require('./middleware/adminAuth');
 
-const authRoutes = require('./routes/authRoutes');
-const BusinessList = require('./routes/BusinessInfo');
-const profileController = require('./controllers/profileController');
-const {is_auth}=require('./middleware/middleware');
-const connect = require('./models/init'); 
+// Fail fast with a clear message instead of a 500 on the first login
+const missing = ['DATABASE_URL', 'JWT_SECRET'].filter(name => !process.env[name]);
+if (missing.length) {
+    console.error(`Missing required environment variable(s): ${missing.join(', ')}`);
+    process.exit(1);
+}
+if (!adminConfig()) {
+    console.warn('Admin dashboard disabled: set ADMIN_USERNAME, ADMIN_PASSWORD_HASH and ADMIN_JWT_SECRET to enable it');
+} else if (process.env.ADMIN_JWT_SECRET === process.env.JWT_SECRET) {
+    console.warn('ADMIN_JWT_SECRET should be different from JWT_SECRET');
+}
+
 connect();
-
-const app = express();
-app.use((req, _, next) => { console.log(req.method, req.path); next() })
-app.use(cors());
-
-app.use(express.json());
-
-app.use('/api/auth', authRoutes); 
-
-app.use('/api/business', BusinessList);
-
-app.get('/api/profile',is_auth, profileController.profile);
 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);

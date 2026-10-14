@@ -1,4 +1,4 @@
-const BASE_URL = 'https://pitchers-showdown-server.onrender.com'
+import { API_URL as BASE_URL } from './config';
 
 export async function fetchBusinessById(businessId) {
     const response = await fetch(`${BASE_URL}/api/business/${businessId}`);

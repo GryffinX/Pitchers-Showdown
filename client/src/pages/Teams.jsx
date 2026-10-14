@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/Teams.css';
+import { API_URL } from '../../lib/config';
 
 function Teams() {
   const [allTeams, setAllTeams] = useState([]);
@@ -15,7 +16,7 @@ function Teams() {
     
     const fetchTeams = async () => {
       try {
-        const response = await fetch('https://pitchers-showdown-server.onrender.com/api/business', {
+        const response = await fetch(`${API_URL}/api/business`, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
@@ -27,7 +28,6 @@ function Teams() {
         }
         
         const data = await response.json();
-        console.log('Teams data:', data);
         setAllTeams(data.teams || []);
         setLoading(false);
       } catch (error) {

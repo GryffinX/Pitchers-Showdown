@@ -10,7 +10,7 @@ const UserSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        set: pass => bcrypt.hashSync(pass, 5),
+        set: pass => bcrypt.hashSync(pass, 10),   // older cost-5 hashes still verify
         required: true,
     },
     name: {
@@ -24,11 +24,16 @@ const UserSchema = new mongoose.Schema({
     desc: {
         type: String, required: true
     },
-    ppt: String
+    ppt: String,
+    deletedAt: {   // set when an admin deletes the team; history (investments) is kept
+        type: Date,
+        default: null,
+    },
 });
 
+// Async so a burst of logins does not block the event loop
 UserSchema.statics.checkPassword = function (inputPassword, hashedPassword) {
-    return bcrypt.compareSync(inputPassword, hashedPassword);
+    return bcrypt.compare(inputPassword, hashedPassword);
 };
 
 const User = mongoose.model('User', UserSchema);

@@ -1,6 +1,5 @@
 import React from 'react';
 import "../styles/Homepage.css";
-import topImage from '../../public/assets/overlay1.png'
 import { Link } from 'react-router-dom'
 
 function Title() {

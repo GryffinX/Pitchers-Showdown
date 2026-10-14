@@ -1,16 +1,35 @@
-const { User, Token } = require('../models/user'); 
+const { User, Token } = require('../models/user');
 const jwt = require('jsonwebtoken');
+const { createTeam, ValidationError } = require('../services/teamService');
 
 const crypto = require('crypto')
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Exact match first. Otherwise ignore surrounding spaces (team creation trims them) and letter case,
+// but only when exactly one account matches, so similar usernames can never be confused
+const findLoginUser = async (username) => {
+    const exact = await User.findOne({ username });
+    if (exact) return exact;
+
+    const trimmed = username.trim();
+    if (!trimmed) return null;
+    const matches = await User.find({ username: new RegExp(`^${escapeRegex(trimmed)}$`, 'i') }).limit(2);
+    return matches.length === 1 ? matches[0] : null;
+};
 
 // Login controller function with JWT
 const loginUser = async (req, res) => {
     const { username, password } = req.body;
 
-    try {
-        const user = await User.findOne({ username });
+    if (typeof username !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ message: 'Username and password are required' });
+    }
 
-        if (!user || !User.checkPassword(password, user.password)) {
+    try {
+        const user = await findLoginUser(username);
+
+        if (!user || user.deletedAt || !(await User.checkPassword(password, user.password))) {
             return res.status(401).json({ message: 'Invalid username or password' });
         }
 
@@ -25,21 +44,21 @@ const loginUser = async (req, res) => {
     }
 };
 
-// Registration function for internal use
+// Public self-registration; off unless ALLOW_PUBLIC_REGISTRATION=true. Admins create teams via /api/admin/teams
 const registerUser = async (req, res) => {
+    if (process.env.ALLOW_PUBLIC_REGISTRATION !== 'true') {
+        return res.status(403).json({ message: 'Public registration is disabled' });
+    }
+
     const { username, password, name } = req.body;
 
     try {
-        const existingUser = await User.findOne({ username });
-        if (existingUser) {
-            return res.status(400).json({ message: 'Username already exists' });
-        }
-
-        const newUser = new User({ username, password, name, desc: 'Pitcher at Pitchers Showdown', ppt: ' ' });
-        await newUser.save(); 
-
+        await createTeam({ username, password, name });
         res.status(201).json({ message: 'User registered successfully' });
     } catch (error) {
+        if (error instanceof ValidationError) {
+            return res.status(error.status === 409 ? 400 : error.status).json({ message: error.message });
+        }
         console.error('Registration error:', error);
         res.status(500).json({ message: 'Internal server error' });
     }

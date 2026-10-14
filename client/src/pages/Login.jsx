@@ -1,4 +1,5 @@
 import useAuthStore from '../../lib/store';
+import { API_URL } from '../../lib/config';
 import '../styles/Login.css';
 import background from '../assets/background_login.png';
 import React, { useState } from 'react';
@@ -25,7 +26,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const response = await fetch('https://pitchers-showdown-server.onrender.com/api/auth/login', {
+      const response = await fetch(`${API_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -73,10 +74,13 @@ export default function Login() {
           <div className="loginsubheader">Participant Login</div>
           <br />
           <form onSubmit={handleSubmit}>
-            <div className="textboxlabel">E mail</div>
+            <div className="textboxlabel">Username</div>
             <input
               className="textbox"
               type="text"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />

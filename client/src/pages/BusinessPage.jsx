@@ -1,8 +1,17 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import "../styles/InvestorPopup.css"
 import { useParams } from "react-router-dom";
 import { fetchBusinessById, investInTeam } from "../../lib/api";
 import useAuthStore from "../../lib/store";
+import GameToast from "../components/GameToast";
+
+// Messages for failed investments, based on what the API actually returns
+const investErrorMessage = (status, data) => {
+    if (status === 401 || status === 403) return "Your session has ended. Please log in again.";
+    if (status === 404) return "This team is no longer available.";
+    if (status >= 500) return "The server ran into a problem. Please try again.";
+    return (data && (data.error || data.message)) || "The investment could not be completed.";
+};
 
 export default function BusinessPage() {
     const { teamId } = useParams();
@@ -14,6 +23,10 @@ export default function BusinessPage() {
     const [amount, setAmount] = useState(0)
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const [toast, setToast] = useState(null);
+    const toastId = useRef(0);
+    const closeToast = useCallback(() => setToast(null), []);
+    const showToast = (type, title, message) => setToast({ id: ++toastId.current, type, title, message });
 
     useEffect(() => {
     async function loadBusiness() {
@@ -36,29 +49,38 @@ export default function BusinessPage() {
 
     async function handleInvest() {
         setError("");
+        if (loading) return;
         if (!isValidAmount()) {
             setError("Please enter a valid amount within your purse and team's remaining amount.");
             return;
         }
+        const amt = Number(amount);
         setLoading(true);
+        let res;
         try {
-            const res = await investInTeam({ teamId, amount: Number(amount), token });
-            const data = await res.json()
-            console.log(data)
-            if (!res.ok) { setError(data.error); return; }
-
-            setAmount("");
-            alert("Investment successful");
-            setBalance(balance - amount)
+            res = await investInTeam({ teamId, amount: amt, token });
         } catch {
-            setError("Investment failed. Try again.");
-        } finally {
+            showToast("error", "Investment failed", "Could not reach the server. Check your connection and try again.");
             setLoading(false);
-        }   
+            return;
+        }
+        const data = await res.json().catch(() => null);
+        setLoading(false);
+
+        // Success only when the server confirms it
+        if (!res.ok) {
+            showToast("error", "Investment failed", investErrorMessage(res.status, data));
+            return;
+        }
+        setAmount("");
+        setBalance(typeof data?.balance === "number" ? data.balance : balance - amt);
+        const teamName = data?.team || team?.team_name;
+        showToast("success", "Investment successful!", `You invested ₹${amt.toLocaleString("en-IN")}${teamName ? ` in ${teamName}` : ""}.`);
     }
 
     return (
     <div className="flex flex-col justify-center items-center h-screen">
+        <GameToast toast={toast} onClose={closeToast} />
         {team ? (
             <>
             <div className="investment-popup-bg">

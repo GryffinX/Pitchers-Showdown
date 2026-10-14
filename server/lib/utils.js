@@ -34,7 +34,7 @@ const updateUser = async (user, data) => {
 
 const addUser = async (data) => {
     try {
-        let password = crypto.randomBytes(8).toString('hex')
+        let password = crypto.randomBytes(4).toString('hex')
         await (new User({ ...data, password, desc: ' ', ppt: ' ' })).save()
         console.log(`Added successfully: ${data.username} ${password}`)
     } catch (err) {

@@ -164,6 +164,42 @@
   font-family: 'Noot', serif;
 }
 
+/* "invested in" / "received" groups */
+.investSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.investSection + .investSection { margin-top: 10px; }
+
+.sectionTitle {
+  font-family: 'Noot', serif;
+  font-size: 1.2rem;
+  color: #0f4f46;
+  border-bottom: 3px solid rgba(0, 0, 0, 0.12);
+  padding-bottom: 4px;
+}
+
+.emptyState {
+  font-family: 'Noot', serif;
+  font-size: 1.05rem;
+  color: #555;
+  padding: 14px 18px;
+  border: 2px dashed rgba(0, 0, 0, 0.18);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.teamRemoved {
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.1);
+  color: #555;
+  font-size: 0.8rem;
+  vertical-align: middle;
+}
+
 /* logout button fixed bottom-right */
 .logout {
   position: fixed;
