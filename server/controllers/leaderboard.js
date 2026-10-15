@@ -4,6 +4,9 @@ const { User } = require('../models/user');
 const { Investment } = require('../models/pitcher'); // change path if model is in different file
 const { pointTotals } = require('../models/points');
 
+// score = 0.6 x (IR / max IR) + 0.4 x (PI / max PI) + admin points
+const WEIGHTS = { IR: 0.6, PI: 0.4 };
+
 class ControlBoard {
 
     // figure out how much investment each user actually got
@@ -49,6 +52,11 @@ class ControlBoard {
 
     // full scoreboard generator (IR, PI, score, sorted)
     async getScoreboardWithScores() {
+        return (await this.getScoreboard()).scoreboard;
+    }
+
+    // Same as above, plus the event-wide values every score is computed from
+    async getScoreboard() {
         const users = await User.find({ deletedAt: null }).select('_id username name image');
 
         // IR = investment received
@@ -80,7 +88,7 @@ class ControlBoard {
             const id = u._id.toString();
             const IR = irMap[id];
             const PI = piMap[id];
-            const formulaScore = (0.6 * (IR / maxIR)) + (0.4 * (PI / maxPI));
+            const formulaScore = (WEIGHTS.IR * (IR / maxIR)) + (WEIGHTS.PI * (PI / maxPI));
             const points = pointsMap[id] || 0;
 
             return {
@@ -99,7 +107,11 @@ class ControlBoard {
         // higher scores first
         scoreboard.sort((a, b) => b.finalScore - a.finalScore);
 
-        return scoreboard;
+        return {
+            scoreboard,
+            irMap,
+            stats: { teamCount: users.length, totalIR, avgIR, maxIR, maxPI, weights: WEIGHTS },
+        };
     }
 }
 

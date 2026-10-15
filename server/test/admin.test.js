@@ -420,6 +420,29 @@ test('admin team list and details show the live score from the leaderboard formu
     assert.deepEqual(detail.body.team.score, s.score3);
     assert.equal(detail.body.rankedTeams, active.length);
 
+    // The details view shows every value used, and the steps add up
+    const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} vs ${b}`);
+    const calcFor = async (team) => (await call('GET', `/api/admin/teams/${team._id}`, { token: adminToken })).body.calculation;
+    const c3 = await calcFor(teams[2]);
+    assert.deepEqual(c3.weights, { IR: 0.6, PI: 0.4 });
+    assert.equal(c3.teamCount, active.length);
+    near(c3.averageReceived, avg, 'average IR');
+    near(c3.maxReceived, maxIR, 'max IR');
+    near(c3.maxProfit, maxPI, 'max profit');
+    near(c3.received, ir[teams[2]._id], 'IR');
+    near(c3.receivedRatio, ir[teams[2]._id] / maxIR, 'IR ratio');
+    near(c3.receivedPart + c3.profitPart, c3.formula, 'parts add up to the formula');
+    near(c3.formula + c3.adminPoints, c3.final, 'formula + points = final');
+    near(c3.final, expected(teams[2]._id), 'final');
+
+    const c1 = await calcFor(teams[0]);   // score1 invested in score2 and score3
+    assert.equal(c1.profitItems.length, 2);
+    near(c1.profitItems.reduce((s, i) => s + i.profit, 0), c1.profit, 'profit items add up');
+    const toScore2 = c1.profitItems.find(i => i.team === 'Score 2');
+    assert.equal(toScore2.amt, 1000);
+    near(toScore2.teamReceived, ir[teams[1]._id], "target team's IR");
+    near(toScore2.profit, 1000 * (ir[teams[1]._id] / avg), 'profit for one investment');
+
     // Scores stay out of every player-facing response
     const publicTeams = (await call('GET', '/api/business')).body.teams;
     assert.ok(publicTeams.every(t => Object.keys(t).sort().join() === 'id,team_name'), 'no score fields for players');

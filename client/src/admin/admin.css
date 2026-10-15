@@ -341,4 +341,18 @@ html:has(.admin-root) body { overflow: visible; }
 }
 
 /* Points (admin only) */
-.adm-score-note { margin: 12px 0 0; }
+.adm-calc { margin-top: 18px; }
+.adm-calc > p { margin: 0 0 12px; }
+.adm-calc-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.adm-calc-group { background: var(--adm-surface-2); border: 1px solid var(--adm-border); border-radius: 8px; padding: 12px 14px; }
+.adm-calc-group-title { font-size: 12px; font-weight: 600; color: var(--adm-muted); margin-bottom: 8px; }
+.adm-calc-group dl { margin: 0; display: grid; gap: 6px; }
+.adm-calc-group dl > div { display: flex; justify-content: space-between; gap: 12px; }
+.adm-calc-group dt { color: var(--adm-muted); }
+.adm-calc-group dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+.adm-calc td, .adm-calc th { font-variant-numeric: tabular-nums; }
+.adm-calc tfoot td { border-top: 1px solid var(--adm-border); border-bottom: none; }
+.adm-calc-final { font-size: 18px; font-weight: 700; color: var(--adm-accent); }
+.adm-calc-sub { margin-top: 18px !important; }
+.adm-calc-gap { margin-top: 18px; }
+@media (max-width: 600px) { .adm-calc-inputs { grid-template-columns: 1fr; } }

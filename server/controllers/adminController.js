@@ -38,16 +38,52 @@ const toPositiveInt = (value, fallback, max) => {
 // Game score for every active team, computed live with the leaderboard formula:
 // 0.6 x (investment received / highest received) + 0.4 x (profit from investments / highest profit),
 // plus the team's admin points added as-is. Admin only: players never see scores. Deleted teams have no score.
-const teamScores = async () => {
-    const board = await leaderboard.getScoreboardWithScores();
-    return Object.fromEntries(board.map((row, i) => [row.id, {
-        value: row.finalScore,
-        formula: row.formulaScore,
-        points: row.points,
-        rank: i + 1,
-        received: row.IR,
-        profit: row.PI,
-    }]));
+const scoresFrom = (scoreboard) => Object.fromEntries(scoreboard.map((row, i) => [row.id, {
+    value: row.finalScore,
+    formula: row.formulaScore,
+    points: row.points,
+    rank: i + 1,
+    received: row.IR,
+    profit: row.PI,
+}]));
+
+const teamScores = async () => scoresFrom(await leaderboard.getScoreboardWithScores());
+
+// Every value that goes into one team's score, step by step, for the team details view
+const scoreCalculation = (score, board, made) => {
+    if (!score) return null;   // deleted teams are not scored
+    const { stats, irMap } = board;
+    const receivedRatio = score.received / stats.maxIR;
+    const profitRatio = score.profit / stats.maxPI;
+    return {
+        weights: stats.weights,
+        teamCount: stats.teamCount,
+        totalReceived: stats.totalIR,
+        averageReceived: stats.avgIR,
+        maxReceived: stats.maxIR,
+        maxProfit: stats.maxPI,
+        received: score.received,
+        profit: score.profit,
+        receivedRatio,
+        profitRatio,
+        receivedPart: stats.weights.IR * receivedRatio,
+        profitPart: stats.weights.PI * profitRatio,
+        formula: score.formula,
+        adminPoints: score.points,
+        final: score.value,
+        // How the profit is made up: each investment x (that team's IR / average IR)
+        profitItems: made.map(inv => {
+            const targetReceived = irMap[String(inv.pitcher && inv.pitcher._id)] || 0;
+            return {
+                id: inv._id,
+                team: inv.pitcher ? (inv.pitcher.name || inv.pitcher.username) : null,
+                deleted: !!(inv.pitcher && inv.pitcher.deletedAt),
+                amt: inv.amt,
+                teamReceived: targetReceived,
+                profit: stats.avgIR > 0 ? inv.amt * (targetReceived / stats.avgIR) : 0,
+            };
+        }),
+    };
 };
 
 const findTeam = async (id) => {
@@ -191,12 +227,13 @@ const listTeams = async (req, res) => {
 const getTeam = async (req, res) => {
     try {
         const team = await findTeam(req.params.id);
-        const [made, received, points, scores] = await Promise.all([
+        const [made, received, points, board] = await Promise.all([
             Investment.find({ user: team._id }).populate('pitcher', 'name username deletedAt').lean(),
             Investment.find({ pitcher: team._id }).populate('user', 'name username deletedAt').lean(),
             pointTotals([team._id]),
-            teamScores(),
+            leaderboard.getScoreboard(),
         ]);
+        const scores = scoresFrom(board.scoreboard);
 
         const describe = (other) => other
             ? { id: other._id, name: other.name, username: other.username, deleted: !!other.deletedAt }
@@ -209,6 +246,7 @@ const getTeam = async (req, res) => {
                 score: scores[team._id.toString()] || null,
             },
             rankedTeams: Object.keys(scores).length,
+            calculation: scoreCalculation(scores[team._id.toString()], board, made),
             investmentsMade: made.map(inv => ({ id: inv._id, amt: inv.amt, team: describe(inv.pitcher) })),
             investmentsReceived: received.map(inv => ({ id: inv._id, amt: inv.amt, team: describe(inv.user) })),
             totalInvested: made.reduce((sum, inv) => sum + inv.amt, 0),

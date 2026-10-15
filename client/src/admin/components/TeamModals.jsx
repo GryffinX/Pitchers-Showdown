@@ -307,6 +307,113 @@ function InvestmentTable({ rows, column }) {
   );
 }
 
+// Rupee-like amounts (IR, profit) keep up to 2 decimals; ratios and points use formatScore
+const formatAmount = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+// Every value that goes into the team's points, worked through step by step
+function ScoreCalculation({ calc }) {
+  const w = calc.weights;
+  const floorNote = (max) => (max === 1 ? ' (minimum 1, avoids dividing by 0)' : '');
+  return (
+    <section className="adm-calc">
+      <h3>Points calculation</h3>
+      <p className="adm-muted adm-small">
+        Points = {w.IR} × (IR ÷ max IR) + {w.PI} × (profit ÷ max profit) + admin points.
+        IR is the total investment this team received. Recalculated live from the database; only admins see it.
+      </p>
+
+      <div className="adm-calc-inputs">
+        <div className="adm-calc-group">
+          <div className="adm-calc-group-title">This team</div>
+          <dl>
+            <div><dt>IR (investment received)</dt><dd>{formatAmount(calc.received)}</dd></div>
+            <div><dt>Profit from investments</dt><dd>{formatAmount(calc.profit)}</dd></div>
+            <div><dt>Admin points</dt><dd>{formatScore(calc.adminPoints)}</dd></div>
+          </dl>
+        </div>
+        <div className="adm-calc-group">
+          <div className="adm-calc-group-title">All {calc.teamCount} active teams</div>
+          <dl>
+            <div><dt>Max IR</dt><dd>{formatAmount(calc.maxReceived)}{floorNote(calc.maxReceived)}</dd></div>
+            <div><dt>Max profit</dt><dd>{formatAmount(calc.maxProfit)}{floorNote(calc.maxProfit)}</dd></div>
+            <div><dt>Total IR</dt><dd>{formatAmount(calc.totalReceived)}</dd></div>
+            <div><dt>Average IR</dt><dd>{formatAmount(calc.averageReceived)}</dd></div>
+          </dl>
+        </div>
+      </div>
+
+      <div className="adm-table-wrap">
+        <table className="adm-table adm-table-compact adm-calc-steps">
+          <thead><tr><th>Part</th><th>Calculation</th><th className="adm-right">Value</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Investment received</td>
+              <td className="adm-mono adm-small">{w.IR} × ({formatAmount(calc.received)} ÷ {formatAmount(calc.maxReceived)}) = {w.IR} × {formatScore(calc.receivedRatio)}</td>
+              <td className="adm-right">{formatScore(calc.receivedPart)}</td>
+            </tr>
+            <tr>
+              <td>Profit</td>
+              <td className="adm-mono adm-small">{w.PI} × ({formatAmount(calc.profit)} ÷ {formatAmount(calc.maxProfit)}) = {w.PI} × {formatScore(calc.profitRatio)}</td>
+              <td className="adm-right">{formatScore(calc.profitPart)}</td>
+            </tr>
+            <tr>
+              <td>Admin points</td>
+              <td className="adm-muted adm-small">added as they are (revoked points don&apos;t count)</td>
+              <td className="adm-right">{formatScore(calc.adminPoints)}</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <td className="adm-strong">Total points</td>
+              <td className="adm-mono adm-small">{formatScore(calc.receivedPart)} + {formatScore(calc.profitPart)} + {formatScore(calc.adminPoints)}</td>
+              <td className="adm-right adm-calc-final" title={String(calc.final)}>{formatScore(calc.final)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <h3 className="adm-calc-sub">How the profit is made up</h3>
+      {calc.profitItems.length === 0 ? (
+        <EmptyState>This team hasn&apos;t invested, so its profit is 0.</EmptyState>
+      ) : (
+        <div className="adm-table-wrap">
+          <table className="adm-table adm-table-compact">
+            <thead>
+              <tr>
+                <th>Invested in</th>
+                <th className="adm-right">Amount</th>
+                <th className="adm-right">That team&apos;s IR</th>
+                <th>Calculation</th>
+                <th className="adm-right">Profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calc.profitItems.map(item => (
+                <tr key={item.id}>
+                  <td>
+                    {item.team || <span className="adm-muted">Unknown team</span>}
+                    {item.deleted && <span className="adm-badge adm-badge-failure adm-badge-inline">deleted</span>}
+                  </td>
+                  <td className="adm-right">{formatAmount(item.amt)}</td>
+                  <td className="adm-right">{formatAmount(item.teamReceived)}</td>
+                  <td className="adm-mono adm-small">{formatAmount(item.amt)} × ({formatAmount(item.teamReceived)} ÷ {formatAmount(calc.averageReceived)})</td>
+                  <td className="adm-right">{formatAmount(item.profit)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td className="adm-strong" colSpan={4}>Total profit</td>
+                <td className="adm-right adm-strong">{formatAmount(calc.profit)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function TeamDetailsModal({ teamId, onClose }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -327,9 +434,6 @@ export function TeamDetailsModal({ teamId, onClose }) {
                 {data.team.score ? formatScore(data.team.score.value) : <span className="adm-muted">Not scored (deleted)</span>}
               </dd>
             </div>
-            {data.team.score && <div><dt>From the formula</dt><dd>{formatScore(data.team.score.formula)}</dd></div>}
-            <div><dt>Admin points</dt><dd>{formatScore(data.team.points || 0)}</dd></div>
-            {data.team.score && <div><dt>Profit from investments</dt><dd>{formatMoney(Math.round(data.team.score.profit))}</dd></div>}
             <div><dt>Username</dt><dd>{data.team.username}</dd></div>
             <div><dt>Status</dt><dd><span className={`adm-badge adm-badge-${data.team.status}`}>{data.team.status}</span>{data.team.deletedAt && <span className="adm-muted adm-small"> {formatDate(data.team.deletedAt)}</span>}</dd></div>
             <div><dt>Remaining balance</dt><dd>{formatMoney(data.team.balance)}</dd></div>
@@ -338,10 +442,9 @@ export function TeamDetailsModal({ teamId, onClose }) {
             <div><dt>Created</dt><dd>{formatDate(data.team.createdAt)}</dd></div>
             <div><dt>Account ID</dt><dd className="adm-mono adm-small">{data.team.id}</dd></div>
           </dl>
-          <p className="adm-muted adm-small adm-score-note">
-            Points = 0.6 × (investment received ÷ highest received) + 0.4 × (profit from investments ÷ highest profit) + admin points (revoked points don&apos;t count).
-            Profit counts each investment × (that team&apos;s investment received ÷ average received). Recalculated live; only admins see it.
-          </p>
+          {data.calculation
+            ? <ScoreCalculation calc={data.calculation} />
+            : <div className="adm-alert adm-alert-info adm-calc-gap">Deleted teams are not scored. Admin points on record: {formatScore(data.team.points || 0)}.</div>}
           <div className="adm-grid-2 adm-grid-tight">
             <section>
               <h3>Invested in ({data.investmentsMade.length})</h3>
