@@ -64,4 +64,15 @@ const registerUser = async (req, res) => {
     }
 };
 
-module.exports = { loginUser,registerUser};
+// Ends the session on the server too, so the token stops working even if a copy was kept
+const logoutUser = async (req, res) => {
+    try {
+        await Token.deleteMany({ user: req.session.user._id });
+        res.json({ message: 'Logged out' });
+    } catch (error) {
+        console.error('Logout error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+module.exports = { loginUser, registerUser, logoutUser };

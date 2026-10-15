@@ -281,7 +281,7 @@ test('health check reports database readiness', async () => {
     assert.deepEqual(res.body, { status: 'ok', database: 'connected' });
 });
 
-test('profile names the other team for investments made and received, including old and removed teams', async () => {
+test('profile names the other team for investments made, never who invested in them', async () => {
     // An old account saved without a name, like the legacy "test" record in real data
     const { insertedId: namelessId } = await User.collection.insertOne({
         username: 'nameless', password: bcrypt.hashSync('password', 5), Rbalance: 7000, desc: ' ', ppt: ' ',
@@ -309,21 +309,151 @@ test('profile names the other team for investments made and received, including 
     assert.equal(profile.status, 200);
     assert.equal(profile.body.balance, 6700);
     assert.deepEqual(profile.body.investments, [{ amt: 300, team: 'nameless', teamDeleted: false }]);
-    assert.deepEqual(profile.body.received, [{ amt: 200, team: 'Prof Two', teamDeleted: false }]);
     assert.ok(!/password|\$2[aby]\$|deletedAt|jwt/i.test(JSON.stringify(profile.body)), 'no account secrets in the profile');
 
-    // Removing the investor keeps the history, flagged as removed
-    await User.updateOne({ _id: two._id }, { deletedAt: new Date() });
-    profile = await call('GET', '/api/profile', { playerToken: t1 });
-    assert.deepEqual(profile.body.received, [{ amt: 200, team: 'Prof Two', teamDeleted: true }]);
+    // Players never learn who invested in them or how much
+    assert.equal(profile.body.received, undefined);
+    assert.ok(!JSON.stringify(profile.body).includes('Prof Two'), 'the investor is not revealed');
+    assert.ok(!JSON.stringify(profile.body).includes('200'), 'the amount received is not revealed');
 
     const empty = await call('GET', '/api/profile', { playerToken: (await playerLogin('nameless', 'password')).body.jwtToken });
     assert.equal(empty.body.name, 'nameless');
     assert.deepEqual(empty.body.investments, []);
-    assert.deepEqual(empty.body.received, [{ amt: 300, team: 'Prof One', teamDeleted: false }]);
+    assert.deepEqual(Object.keys(empty.body).sort(), ['balance', 'investments', 'name']);
+
+    // Removing a team you invested in keeps the history, flagged as removed
+    await User.updateOne({ _id: namelessId }, { deletedAt: new Date() });
+    profile = await call('GET', '/api/profile', { playerToken: t1 });
+    assert.deepEqual(profile.body.investments, [{ amt: 300, team: 'nameless', teamDeleted: true }]);
 
     await Investment.deleteMany({ $or: [{ user: { $in: [one._id, two._id] } }, { pitcher: one._id }] });
     await User.deleteMany({ _id: { $in: [namelessId, one._id, two._id] } });
+});
+
+test('admin awards points that can be edited, revoked and restored', async () => {
+    const team = await new User({ username: 'pointy', name: 'Pointy', password: 'password', desc: ' ', ppt: ' ' }).save();
+    const award = (body) => call('POST', `/api/admin/teams/${team._id}/points`, { token: adminToken, body });
+    const edit = (id, body) => call('PATCH', `/api/admin/points/${id}`, { token: adminToken, body });
+
+    const empty = await call('GET', `/api/admin/teams/${team._id}/points`, { token: adminToken });
+    assert.equal(empty.status, 200);
+    assert.equal(empty.body.total, 0);
+    assert.deepEqual(empty.body.awards, []);
+
+    assert.equal((await award({ points: 50, reason: '  Best pitch deck  ' })).status, 201);
+    let res = await award({ points: -10, reason: 'Late' });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.total, 40);
+    const [late, best] = res.body.awards; // newest first
+    assert.equal(best.reason, 'Best pitch deck');
+
+    // Bad input changes nothing
+    for (const body of [{ points: 0 }, { points: 1.5 }, { points: '5' }, { points: 1e6 }, { points: 5, reason: 'x'.repeat(121) }])
+        assert.equal((await award(body)).status, 400, JSON.stringify(body));
+    assert.equal((await edit(best.id, { team: 'x' })).status, 400);
+    assert.equal((await edit(best.id, { revoked: 'yes' })).status, 400);
+    assert.equal((await edit('nope', { points: 1 })).status, 400);
+    assert.equal((await edit(new mongoose.Types.ObjectId(), { points: 1 })).status, 404);
+    assert.equal((await call('POST', `/api/admin/teams/${team._id}/points`, { body: { points: 5 } })).status, 401, 'admin only');
+
+    res = await edit(best.id, { points: 70, reason: 'Best pitch deck (final)' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.total, 60);
+
+    assert.ok(res.body.awards.find(a => a.id === best.id).editedAt, 'changing the value marks it edited');
+
+    res = await edit(late.id, { revoked: true });
+    assert.equal(res.body.total, 70);
+    assert.equal(res.body.awards.find(a => a.id === late.id).revoked, true);
+    assert.equal(res.body.awards.find(a => a.id === late.id).editedAt, null, 'revoking is not an edit');
+
+    const listed = await call('GET', '/api/admin/teams', { token: adminToken });
+    assert.equal(listed.body.teams.find(t => t.username === 'pointy').points, 70);
+    assert.equal((await call('GET', `/api/admin/teams/${team._id}`, { token: adminToken })).body.team.points, 70);
+
+    res = await edit(late.id, { revoked: false });
+    assert.equal(res.body.total, 60);
+
+    // Deleted teams are read-only
+    await User.updateOne({ _id: team._id }, { deletedAt: new Date() });
+    assert.equal((await award({ points: 5 })).status, 409);
+    assert.equal((await edit(best.id, { points: 1 })).status, 409);
+
+    await User.deleteOne({ _id: team._id });
+});
+
+test('admin team list and details show the live score from the leaderboard formula', async () => {
+    const teams = [];
+    for (const n of [1, 2, 3]) teams.push(await new User({ username: `score${n}`, name: `Score ${n}`, password: 'password', desc: ' ', ppt: ' ' }).save());
+    const tokens = [];
+    for (const n of [1, 2, 3]) tokens.push((await playerLogin(`score${n}`, 'password')).body.jwtToken);
+    const invest = (i, j, amt) => call('POST', `/api/business/${teams[j]._id}`, { playerToken: tokens[i], body: { amt } });
+    assert.equal((await invest(0, 1, 1000)).status, 200);
+    assert.equal((await invest(0, 2, 500)).status, 200);
+    assert.equal((await invest(1, 2, 2000)).status, 200);
+
+    // Independent calculation over everything in the database
+    const active = await User.find({ deletedAt: null });
+    const all = await Investment.find();
+    const ir = {};
+    active.forEach(u => { ir[u._id] = 0; });
+    all.forEach(inv => { ir[inv.pitcher] = (ir[inv.pitcher] || 0) + inv.amt; });
+    const avg = Object.values(ir).reduce((a, b) => a + b, 0) / active.length;
+    const pi = {};
+    active.forEach(u => { pi[u._id] = 0; });
+    all.forEach(inv => { pi[inv.user] = (pi[inv.user] || 0) + inv.amt * ((ir[inv.pitcher] || 0) / avg); });
+    const maxIR = Math.max(...Object.values(ir), 1);
+    const maxPI = Math.max(...Object.values(pi), 1);
+    const expected = (id) => 0.6 * (ir[id] / maxIR) + 0.4 * (pi[id] / maxPI);
+
+    const listed = await call('GET', '/api/admin/teams?q=score', { token: adminToken });
+    assert.equal(listed.status, 200);
+    for (const t of teams) {
+        const row = listed.body.teams.find(r => r.username === t.username);
+        assert.ok(Math.abs(row.score.value - expected(t._id)) < 1e-9, `${t.username} score`);
+        assert.equal(row.score.received, ir[t._id]);
+    }
+    const s = Object.fromEntries(listed.body.teams.map(r => [r.username, r.score]));
+    assert.ok(s.score3.rank < s.score2.rank, 'more investment received ranks higher');
+
+    const detail = await call('GET', `/api/admin/teams/${teams[2]._id}`, { token: adminToken });
+    assert.deepEqual(detail.body.team.score, s.score3);
+    assert.equal(detail.body.rankedTeams, active.length);
+
+    // Scores stay out of every player-facing response
+    const publicTeams = (await call('GET', '/api/business')).body.teams;
+    assert.ok(publicTeams.every(t => Object.keys(t).sort().join() === 'id,team_name'), 'no score fields for players');
+    const info = (await call('GET', `/api/business/${teams[2]._id}`)).body;
+    assert.deepEqual(Object.keys(info).sort(), ['link', 'team_content', 'team_name']);
+    // Admin points are added to the score as-is; the formula part does not change
+    const lowest = teams[0];
+    const before = s.score1;
+    const award = await call('POST', `/api/admin/teams/${lowest._id}/points`, { token: adminToken, body: { points: 5 } });
+    await call('POST', `/api/admin/teams/${lowest._id}/points`, { token: adminToken, body: { points: -2 } });
+    let after = (await call('GET', `/api/admin/teams/${lowest._id}`, { token: adminToken })).body.team.score;
+    assert.equal(after.points, 3);
+    assert.ok(Math.abs(after.formula - before.formula) < 1e-9, 'formula part is unchanged');
+    assert.ok(Math.abs(after.value - (before.formula + 3)) < 1e-9, 'score = formula + points');
+    assert.equal(after.rank, 1, 'points can move a team up the ranking');
+
+    // Revoked points stop counting
+    const plus5 = award.body.awards.find(a => a.points === 5);
+    await call('PATCH', `/api/admin/points/${plus5.id}`, { token: adminToken, body: { revoked: true } });
+    after = (await call('GET', `/api/admin/teams/${lowest._id}`, { token: adminToken })).body.team.score;
+    assert.ok(Math.abs(after.value - (before.formula - 2)) < 1e-9, 'revoked points are not added');
+
+    const prof = (await call('GET', '/api/profile', { playerToken: tokens[2] })).body;
+    assert.deepEqual(Object.keys(prof).sort(), ['balance', 'investments', 'name']);
+
+    await Investment.deleteMany({ user: { $in: teams.map(t => t._id) } });
+    await User.deleteMany({ _id: { $in: teams.map(t => t._id) } });
+});
+
+test('player logout ends the session on the server', async () => {
+    const token = (await playerLogin('legacy', 'password')).body.jwtToken;
+    assert.equal((await call('POST', '/api/auth/logout', { playerToken: token })).status, 200);
+    assert.equal((await call('GET', '/api/profile', { playerToken: token })).status, 403);
+    assert.equal((await call('POST', '/api/auth/logout')).status, 401);
 });
 
 test('public registration is disabled unless explicitly enabled', async () => {

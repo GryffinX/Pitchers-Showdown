@@ -200,19 +200,6 @@
   vertical-align: middle;
 }
 
-/* logout button fixed bottom-right */
-.logout {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  background: rgba(0,0,0,0.6);
-  color: #fff;
-  border: none;
-  padding: 8px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
 /* error banner (shown then redirects) */
 .errorBanner {
   position: fixed;

@@ -126,7 +126,7 @@ function Teams() {
               style={{ backgroundColor: getTeamColor(index) }}
               onClick={() => handleTeamClick(team)}
             >
-              <div className="team-number">Team {startIndex + index + 1}</div>
+              <div className="team-number">#{startIndex + index + 1}</div>
               <div className="team-name">{team.team_name}</div>
             </div>
           ))}

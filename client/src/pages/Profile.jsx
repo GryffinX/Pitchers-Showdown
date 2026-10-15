@@ -6,13 +6,6 @@ import useAuthStore from '../../lib/store';
 import { API_URL } from '../../lib/config';
 
 
-function logout() {
-  useAuthStore.getState().logout();
-  localStorage.removeItem('token');
-  window.location.href = '/login';
-}
-
-
 function InvestmentSection({ title, items, empty }) {
   return (
     <section className='investSection' aria-label={title}>
@@ -141,21 +134,11 @@ export default function Profile() {
                 items={profile.investments}
                 empty="You haven't invested in any teams yet."
               />
-              {Array.isArray(profile.received) && (
-                <InvestmentSection
-                  title='Investments received'
-                  items={profile.received}
-                  empty='No team has invested in you yet.'
-                />
-              )}
             </div>
           </div>
         </div>
       </main>
 
-      <button className='logout' onClick={logout}>
-        Logout →
-      </button>
     </div>
   );
 } 

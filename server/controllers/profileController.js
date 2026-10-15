@@ -12,17 +12,16 @@ const describe = (inv, other) => ({
 let profile = async (req, res) => {
     try {
         const userSession = req.session && req.session.user;
-        const [user, made, received] = await Promise.all([
+        // Only the investments this team made. Who invested in a team, and how much, stays hidden from players.
+        const [user, made] = await Promise.all([
             User.findById(userSession._id).select('name username Rbalance').lean(),
             Investment.find({ user: userSession._id }).populate('pitcher', 'name username deletedAt').lean(),
-            Investment.find({ pitcher: userSession._id }).populate('user', 'name username deletedAt').lean(),
         ]);
 
         return res.json({
             name: displayName(user),
             balance: user ? user.Rbalance : userSession.Rbalance,
-            investments: made.map(inv => describe(inv, inv.pitcher)),   // teams this team invested in
-            received: received.map(inv => describe(inv, inv.user)),     // teams that invested in this team
+            investments: made.map(inv => describe(inv, inv.pitcher)),
         });
     } catch (err) {
         console.error('Profile error:', err);

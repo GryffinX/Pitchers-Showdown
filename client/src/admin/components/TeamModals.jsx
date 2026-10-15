@@ -188,7 +188,7 @@ export function ResetPasswordModal({ team, onClose }) {
     setError('');
     try {
       await adminRequest(`/teams/${team.id}/reset-password`, { method: 'POST', body: { password } });
-      notify(`Password reset for @${team.username}`);
+      notify(`Password reset for ${team.username}`);
       setDone(true);
     } catch (err) {
       setError(err.message);
@@ -280,6 +280,18 @@ export function DeleteTeamModal({ team, onClose, onDeleted }) {
   );
 }
 
+const formatScore = (value) => Number(value).toFixed(3);
+
+// Live game score (admin only), shown next to the team name. Deleted teams are not ranked.
+export function ScoreBadge({ score }) {
+  if (!score) return null;
+  return (
+    <span className="adm-score" title={`Score ${formatScore(score.value)}, rank #${score.rank}`}>
+      {formatScore(score.value)}<span className="adm-score-rank">#{score.rank}</span>
+    </span>
+  );
+}
+
 function InvestmentTable({ rows, column }) {
   if (rows.length === 0) return <EmptyState>None.</EmptyState>;
   return (
@@ -315,7 +327,23 @@ export function TeamDetailsModal({ teamId, onClose }) {
       {error ? <ErrorState message={error} /> : !data ? <Spinner /> : (
         <>
           <dl className="adm-details">
-            <div><dt>Team name</dt><dd>{data.team.name}</dd></div>
+            <div><dt>Team name</dt><dd className="adm-team-cell">{data.team.name} <ScoreBadge score={data.team.score} /></dd></div>
+            <div>
+              <dt>Score</dt>
+              <dd>
+                {data.team.score
+                  ? <>{formatScore(data.team.score.value)} <span className="adm-muted">· rank #{data.team.score.rank} of {data.rankedTeams}</span></>
+                  : <span className="adm-muted">Not ranked (deleted)</span>}
+              </dd>
+            </div>
+            {data.team.score && (
+              <div>
+                <dt>Score breakdown</dt>
+                <dd>{formatScore(data.team.score.formula)} formula <span className="adm-muted">+</span> {data.team.score.points.toLocaleString('en-IN')} points</dd>
+              </div>
+            )}
+            {data.team.score && <div><dt>Profit from investments</dt><dd>{formatMoney(Math.round(data.team.score.profit))}</dd></div>}
+            <div><dt>Points</dt><dd>{(data.team.points || 0).toLocaleString('en-IN')}</dd></div>
             <div><dt>Username</dt><dd>{data.team.username}</dd></div>
             <div><dt>Status</dt><dd><span className={`adm-badge adm-badge-${data.team.status}`}>{data.team.status}</span>{data.team.deletedAt && <span className="adm-muted adm-small"> {formatDate(data.team.deletedAt)}</span>}</dd></div>
             <div><dt>Remaining balance</dt><dd>{formatMoney(data.team.balance)}</dd></div>
@@ -324,6 +352,10 @@ export function TeamDetailsModal({ teamId, onClose }) {
             <div><dt>Created</dt><dd>{formatDate(data.team.createdAt)}</dd></div>
             <div><dt>Account ID</dt><dd className="adm-mono adm-small">{data.team.id}</dd></div>
           </dl>
+          <p className="adm-muted adm-small adm-score-note">
+            Score = 0.6 × (investment received ÷ highest received) + 0.4 × (profit from investments ÷ highest profit) + admin points (revoked points don&apos;t count).
+            Profit counts each investment × (that team&apos;s investment received ÷ average received). Recalculated live; only admins see it.
+          </p>
           <div className="adm-grid-2 adm-grid-tight">
             <section>
               <h3>Invested in ({data.investmentsMade.length})</h3>
@@ -336,6 +368,194 @@ export function TeamDetailsModal({ teamId, onClose }) {
           </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+// Mirrors the limits in server/controllers/adminController.js
+const MAX_POINTS = 100000;
+const MAX_REASON = 120;
+const checkPoints = (text) => {
+  const n = Number(text);
+  if (text.trim() === '' || !Number.isInteger(n) || n === 0 || Math.abs(n) > MAX_POINTS)
+    return `Enter a whole number between -${MAX_POINTS.toLocaleString('en-IN')} and ${MAX_POINTS.toLocaleString('en-IN')}, not 0.`;
+  return '';
+};
+const formatPoints = (n) => `${n > 0 ? '+' : ''}${Number(n).toLocaleString('en-IN')}`;
+
+function PointsRow({ award, editable, busy, onSave, onToggle }) {
+  const [editing, setEditing] = useState(false);
+  const [points, setPoints] = useState(String(award.points));
+  const [reason, setReason] = useState(award.reason);
+  const [error, setError] = useState('');
+
+  const startEdit = () => {
+    setPoints(String(award.points));
+    setReason(award.reason);
+    setError('');
+    setEditing(true);
+  };
+
+  const save = async (e) => {
+    e.preventDefault();
+    const pointsError = checkPoints(points);
+    if (pointsError) return setError(pointsError);
+    if (await onSave(award, { points: Number(points), reason: reason.trim() }, setError)) setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <tr>
+        <td colSpan={4}>
+          <form className="adm-points-edit" onSubmit={save} noValidate>
+            <input className="adm-input adm-points-input" type="number" step="1" value={points} onChange={e => setPoints(e.target.value)} disabled={busy} aria-label="Points" autoFocus />
+            <input className="adm-input" value={reason} maxLength={MAX_REASON} onChange={e => setReason(e.target.value)} disabled={busy} placeholder="Reason (optional)" aria-label="Reason" />
+            <button className="adm-btn adm-btn-primary adm-btn-sm" type="submit" disabled={busy}>Save</button>
+            <button className="adm-btn adm-btn-ghost adm-btn-sm" type="button" onClick={() => setEditing(false)} disabled={busy}>Cancel</button>
+          </form>
+          {error && <div className="adm-alert adm-alert-error adm-points-error" role="alert">{error}</div>}
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr className={award.revoked ? 'adm-points-revoked' : ''}>
+      <td className={`adm-nowrap adm-strong ${award.points > 0 ? 'adm-points-plus' : 'adm-points-minus'}`}>{formatPoints(award.points)}</td>
+      <td>
+        {award.reason || <span className="adm-muted">No reason given</span>}
+        {award.revoked && <span className="adm-badge adm-badge-failure adm-badge-inline">revoked</span>}
+      </td>
+      <td className="adm-nowrap adm-muted adm-small">
+        {formatDate(award.createdAt)}
+        {award.editedAt && <div>edited {formatDate(award.editedAt)}</div>}
+      </td>
+      <td className="adm-right">
+        {editable && (
+          <div className="adm-row-actions">
+            {!award.revoked && <button className="adm-btn adm-btn-ghost adm-btn-sm" onClick={startEdit} disabled={busy}>Edit</button>}
+            {award.revoked
+              ? <button className="adm-btn adm-btn-ghost adm-btn-sm" onClick={() => onToggle(award, false)} disabled={busy}>Restore</button>
+              : <button className="adm-btn adm-btn-danger-ghost adm-btn-sm" onClick={() => onToggle(award, true)} disabled={busy}>Revoke</button>}
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+// Give or take points by hand. Every entry can be edited, revoked (no longer counted) and restored.
+export function PointsModal({ team, onClose, onChanged }) {
+  const notify = useToast();
+  const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState('');
+  const [points, setPoints] = useState('');
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    adminRequest(`/teams/${team.id}/points`).then(setData).catch(err => setLoadError(err.message));
+  }, [team.id]);
+
+  const apply = (result) => {
+    setData(result);
+    onChanged(result.total);
+  };
+
+  const add = async (e) => {
+    e.preventDefault();
+    const pointsError = checkPoints(points);
+    if (pointsError) return setError(pointsError);
+    setBusy(true);
+    setError('');
+    try {
+      apply(await adminRequest(`/teams/${team.id}/points`, { method: 'POST', body: { points: Number(points), reason: reason.trim() } }));
+      notify(`${formatPoints(Number(points))} points for “${team.name}”`);
+      setPoints('');
+      setReason('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async (award, body, setRowError) => {
+    setBusy(true);
+    try {
+      apply(await adminRequest(`/points/${award.id}`, { method: 'PATCH', body }));
+      notify('Points entry updated');
+      return true;
+    } catch (err) {
+      setRowError(err.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggle = async (award, revoked) => {
+    setBusy(true);
+    setError('');
+    try {
+      apply(await adminRequest(`/points/${award.id}`, { method: 'PATCH', body: { revoked } }));
+      notify(`${revoked ? 'Revoked' : 'Restored'} ${formatPoints(award.points)} points`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const editable = team.status === 'active';
+
+  return (
+    <Modal title="Points" onClose={onClose} wide busy={busy} footer={<button className="adm-btn adm-btn-ghost" onClick={onClose} disabled={busy}>Close</button>}>
+      <div className="adm-points-head">
+        <div className="adm-target">
+          <div className="adm-strong">{team.name}</div>
+          <div className="adm-muted">{team.username}</div>
+        </div>
+        <div className="adm-points-total">
+          <span className="adm-muted adm-small">Total points</span>
+          <strong>{data ? data.total.toLocaleString('en-IN') : '—'}</strong>
+        </div>
+      </div>
+
+      {editable ? (
+        <form className="adm-points-add" onSubmit={add} noValidate>
+          <label className="adm-field">
+            <span>Points <em className="adm-muted">negative takes away</em></span>
+            <input className="adm-input adm-points-input" type="number" step="1" placeholder="e.g. 50" value={points} onChange={e => setPoints(e.target.value)} disabled={busy || !data} autoFocus />
+          </label>
+          <label className="adm-field adm-points-reason">
+            <span>Reason <em className="adm-muted">optional</em></span>
+            <input className="adm-input" placeholder="e.g. Best pitch, round 1" value={reason} maxLength={MAX_REASON} onChange={e => setReason(e.target.value)} disabled={busy || !data} />
+          </label>
+          <button className="adm-btn adm-btn-primary" type="submit" disabled={busy || !data}>{busy ? 'Saving…' : 'Add points'}</button>
+        </form>
+      ) : (
+        <div className="adm-alert adm-alert-info">This team is deleted, so its points can be viewed but not changed.</div>
+      )}
+      {error && <div className="adm-alert adm-alert-error" role="alert">{error}</div>}
+
+      <h3 className="adm-points-history">History</h3>
+      {loadError ? <ErrorState message={loadError} /> : !data ? <Spinner /> : data.awards.length === 0 ? (
+        <EmptyState>No points given yet.</EmptyState>
+      ) : (
+        <div className="adm-table-wrap">
+          <table className="adm-table adm-table-compact">
+            <thead><tr><th>Points</th><th>Reason</th><th>Added</th><th className="adm-right">Actions</th></tr></thead>
+            <tbody>
+              {data.awards.map(award => (
+                <PointsRow key={award.id} award={award} editable={editable} busy={busy} onSave={save} onToggle={toggle} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="adm-muted adm-small adm-points-note">Revoked entries stay in the history but don&apos;t count towards the total. Restore one to count it again.</p>
     </Modal>
   );
 }

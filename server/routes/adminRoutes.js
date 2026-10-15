@@ -26,4 +26,8 @@ router.patch('/teams/:id', admin.updateTeam);
 router.post('/teams/:id/reset-password', admin.resetPassword);
 router.delete('/teams/:id', admin.deleteTeam);
 
+router.get('/teams/:id/points', admin.listPoints);
+router.post('/teams/:id/points', admin.awardPoints);
+router.patch('/points/:awardId', admin.updatePoints);
+
 module.exports = router;

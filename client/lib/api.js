@@ -16,4 +16,11 @@ export async function investInBusiness(businessId, amount, token) {
     });
 }
 
-export const investInTeam = ({ teamId, amount, token }) => investInBusiness(teamId, amount, token);
+// Ends the session on the server. Signing out locally must not depend on this succeeding.
+export async function logoutPlayer(token) {
+    try {
+        await fetch(`${BASE_URL}/api/auth/logout`, { method: "POST", headers: { "x-access-token": token } });
+    } catch { /* offline or server down: the local sign-out still happens */ }
+}
+
+export const investInTeam =({ teamId, amount, token }) => investInBusiness(teamId, amount, token);

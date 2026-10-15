@@ -3,7 +3,7 @@ import { adminRequest, formatDate, formatMoney } from '../adminApi';
 import { Spinner, ErrorState, EmptyState } from '../components/States';
 import Pagination from '../components/Pagination';
 import {
-  CreateTeamModal, RenameTeamModal, ResetPasswordModal, DeleteTeamModal, TeamDetailsModal,
+  CreateTeamModal, RenameTeamModal, ResetPasswordModal, DeleteTeamModal, TeamDetailsModal, PointsModal, ScoreBadge,
 } from '../components/TeamModals';
 
 const COLUMNS = [
@@ -56,7 +56,7 @@ export default function AdminTeams() {
       <header className="adm-page-head">
         <div>
           <h1>Teams</h1>
-          <p className="adm-muted">Create accounts, rename teams, reset passwords and remove teams.</p>
+          <p className="adm-muted">Create accounts, rename teams, give points, reset passwords and remove teams.</p>
         </div>
         <button className="adm-btn adm-btn-primary" onClick={() => setModal({ type: 'create' })}>+ New team</button>
       </header>
@@ -94,6 +94,7 @@ export default function AdminTeams() {
                         </button>
                       </th>
                     ))}
+                    <th className="adm-right">Points</th>
                     <th>Status</th>
                     <th>ID</th>
                     <th className="adm-right">Actions</th>
@@ -103,16 +104,21 @@ export default function AdminTeams() {
                   {data.teams.map(team => (
                     <tr key={team.id}>
                       <td>
-                        <button className="adm-team-link" onClick={open('details', team)}>{team.name}</button>
+                        <div className="adm-team-cell">
+                          <button className="adm-team-link" onClick={open('details', team)}>{team.name}</button>
+                          <ScoreBadge score={team.score} />
+                        </div>
                         <div className="adm-muted adm-small">{team.username}</div>
                       </td>
                       <td className="adm-right adm-nowrap">{formatMoney(team.balance)}</td>
                       <td className="adm-nowrap">{formatDate(team.createdAt)}</td>
+                      <td className="adm-right adm-nowrap">{(team.points || 0).toLocaleString('en-IN')}</td>
                       <td><span className={`adm-badge adm-badge-${team.status}`}>{team.status}</span></td>
                       <td className="adm-mono adm-muted adm-small" title={team.id}>…{String(team.id).slice(-6)}</td>
                       <td className="adm-right">
                         <div className="adm-row-actions">
                           <button className="adm-btn adm-btn-ghost adm-btn-sm" onClick={open('details', team)}>View</button>
+                          <button className="adm-btn adm-btn-ghost adm-btn-sm" onClick={open('points', team)}>Points</button>
                           {team.status === 'active' && <>
                             <button className="adm-btn adm-btn-ghost adm-btn-sm" onClick={open('rename', team)}>Rename</button>
                             <button className="adm-btn adm-btn-ghost adm-btn-sm" onClick={open('reset', team)}>Reset password</button>
@@ -140,6 +146,13 @@ export default function AdminTeams() {
             setData(d => ({ ...d, teams: d.teams.map(t => (t.id === updated.id ? updated : t)) }));
             closeModal();
           }}
+        />
+      )}
+      {modal && modal.type === 'points' && (
+        <PointsModal
+          team={modal.team}
+          onClose={() => { closeModal(); load(); }} // scores and ranks depend on points
+          onChanged={points => setData(d => ({ ...d, teams: d.teams.map(t => (t.id === modal.team.id ? { ...t, points } : t)) }))}
         />
       )}
       {modal && modal.type === 'reset' && <ResetPasswordModal team={modal.team} onClose={closeModal} />}

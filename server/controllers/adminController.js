@@ -6,6 +6,8 @@ const mongoose = require('mongoose');
 const { User, Token } = require('../models/user');
 const { Investment } = require('../models/pitcher');
 const { AdminSession } = require('../models/admin');
+const { PointAward, pointTotals } = require('../models/points');
+const leaderboard = require('./leaderboard');
 const { adminConfig, ADMIN_AUDIENCE, ADMIN_TOKEN_TTL_SECONDS } = require('../middleware/adminAuth');
 const {
     ACTIVE, ValidationError, validateName, validatePassword, createTeam, serializeTeam,
@@ -31,6 +33,21 @@ const toPositiveInt = (value, fallback, max) => {
     const n = parseInt(value, 10);
     if (!Number.isFinite(n) || n < 1) return fallback;
     return max ? Math.min(n, max) : n;
+};
+
+// Game score for every active team, computed live with the leaderboard formula:
+// 0.6 x (investment received / highest received) + 0.4 x (profit from investments / highest profit),
+// plus the team's admin points added as-is. Admin only: players never see scores. Deleted teams have no score.
+const teamScores = async () => {
+    const board = await leaderboard.getScoreboardWithScores();
+    return Object.fromEntries(board.map((row, i) => [row.id, {
+        value: row.finalScore,
+        formula: row.formulaScore,
+        points: row.points,
+        rank: i + 1,
+        received: row.IR,
+        profit: row.PI,
+    }]));
 };
 
 const findTeam = async (id) => {
@@ -140,7 +157,15 @@ const listTeams = async (req, res) => {
             User.find(filter).sort({ [sortField]: order, _id: order }).skip((page - 1) * limit).limit(limit),
         ]);
 
-        return res.json({ teams: teams.map(serializeTeam), total, page, pages: Math.max(1, Math.ceil(total / limit)), limit });
+        const [points, scores] = await Promise.all([pointTotals(teams.map(t => t._id)), teamScores()]);
+        return res.json({
+            teams: teams.map(t => ({
+                ...serializeTeam(t),
+                points: points[t._id.toString()] || 0,
+                score: scores[t._id.toString()] || null,
+            })),
+            total, page, pages: Math.max(1, Math.ceil(total / limit)), limit,
+        });
     } catch (err) {
         return sendError(res, err, 'Admin list teams');
     }
@@ -149,9 +174,11 @@ const listTeams = async (req, res) => {
 const getTeam = async (req, res) => {
     try {
         const team = await findTeam(req.params.id);
-        const [made, received] = await Promise.all([
+        const [made, received, points, scores] = await Promise.all([
             Investment.find({ user: team._id }).populate('pitcher', 'name username deletedAt').lean(),
             Investment.find({ pitcher: team._id }).populate('user', 'name username deletedAt').lean(),
+            pointTotals([team._id]),
+            teamScores(),
         ]);
 
         const describe = (other) => other
@@ -159,7 +186,12 @@ const getTeam = async (req, res) => {
             : null;
 
         return res.json({
-            team: serializeTeam(team),
+            team: {
+                ...serializeTeam(team),
+                points: points[team._id.toString()] || 0,
+                score: scores[team._id.toString()] || null,
+            },
+            rankedTeams: Object.keys(scores).length,
             investmentsMade: made.map(inv => ({ id: inv._id, amt: inv.amt, team: describe(inv.pitcher) })),
             investmentsReceived: received.map(inv => ({ id: inv._id, amt: inv.amt, team: describe(inv.user) })),
             totalInvested: made.reduce((sum, inv) => sum + inv.amt, 0),
@@ -239,7 +271,102 @@ const deleteTeam = async (req, res) => {
     }
 };
 
+// --- Points ---
+
+const MAX_POINTS = 100000;
+const MAX_REASON = 120;
+
+const validatePoints = (value) => {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value === 0 || Math.abs(value) > MAX_POINTS)
+        throw new ValidationError(`Points must be a whole number between -${MAX_POINTS} and ${MAX_POINTS}, not 0`);
+    return value;
+};
+
+const validateReason = (value) => {
+    if (value === undefined || value === null) return '';
+    if (typeof value !== 'string' || value.trim().length > MAX_REASON)
+        throw new ValidationError(`Reason must be at most ${MAX_REASON} characters`);
+    return value.trim();
+};
+
+const serializeAward = (award) => ({
+    id: award._id,
+    points: award.points,
+    reason: award.reason || '',
+    createdAt: award.createdAt,
+    editedAt: award.editedAt || null,
+    revoked: !!award.revokedAt,
+    revokedAt: award.revokedAt || null,
+});
+
+const pointsResponse = async (team) => {
+    const awards = await PointAward.find({ team: team._id }).sort({ createdAt: -1, _id: -1 });
+    return {
+        team: serializeTeam(team),
+        total: awards.filter(a => !a.revokedAt).reduce((sum, a) => sum + a.points, 0),
+        awards: awards.map(serializeAward),
+    };
+};
+
+const listPoints = async (req, res) => {
+    try {
+        const team = await findTeam(req.params.id);
+        return res.json(await pointsResponse(team));
+    } catch (err) {
+        return sendError(res, err, 'Admin list points');
+    }
+};
+
+const awardPoints = async (req, res) => {
+    try {
+        const body = req.body || {};
+        const team = await findTeam(req.params.id);
+        if (team.deletedAt) throw new ValidationError('Deleted teams cannot get points', 409);
+
+        await PointAward.create({ team: team._id, points: validatePoints(body.points), reason: validateReason(body.reason) });
+        return res.status(201).json(await pointsResponse(team));
+    } catch (err) {
+        return sendError(res, err, 'Admin award points');
+    }
+};
+
+const POINT_FIELDS = ['points', 'reason', 'revoked'];
+
+// Edit an award's value or reason, or revoke / restore it
+const updatePoints = async (req, res) => {
+    try {
+        const body = req.body || {};
+        const unknown = Object.keys(body).filter(key => !POINT_FIELDS.includes(key));
+        if (unknown.length) throw new ValidationError(`Field(s) cannot be edited: ${unknown.join(', ')}`);
+        if (!Object.keys(body).length) throw new ValidationError('Nothing to update');
+        if ('revoked' in body && typeof body.revoked !== 'boolean') throw new ValidationError('revoked must be true or false');
+
+        if (!mongoose.isValidObjectId(req.params.awardId)) throw new ValidationError('Invalid points entry id');
+        const award = await PointAward.findById(req.params.awardId);
+        if (!award) throw new ValidationError('Points entry not found', 404);
+
+        const team = await findTeam(award.team);
+        if (team.deletedAt) throw new ValidationError('Points of deleted teams cannot be changed', 409);
+
+        const points = 'points' in body ? validatePoints(body.points) : award.points;
+        const reason = 'reason' in body ? validateReason(body.reason) : award.reason;
+        if (points !== award.points || reason !== award.reason) {
+            award.points = points;
+            award.reason = reason;
+            award.editedAt = new Date();
+        }
+        if (body.revoked === true && !award.revokedAt) award.revokedAt = new Date();
+        if (body.revoked === false) award.revokedAt = null;
+        await award.save();
+
+        return res.json(await pointsResponse(team));
+    } catch (err) {
+        return sendError(res, err, 'Admin update points');
+    }
+};
+
 module.exports = {
     login, logout, me, stats,
     listTeams, getTeam, createTeam: createTeamHandler, updateTeam, resetPassword, deleteTeam,
+    listPoints, awardPoints, updatePoints,
 };

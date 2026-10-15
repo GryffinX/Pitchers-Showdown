@@ -2,6 +2,7 @@
 
 const { User } = require('../models/user');
 const { Investment } = require('../models/pitcher'); // change path if model is in different file
+const { pointTotals } = require('../models/points');
 
 class ControlBoard {
 
@@ -71,12 +72,16 @@ class ControlBoard {
         const maxIR = Math.max(...Object.values(irMap), 1);
         const maxPI = Math.max(...Object.values(piMap), 1);
 
+        // points given by admins (revoked ones excluded) are added as-is, not weighted
+        const pointsMap = await pointTotals(users.map(u => u._id));
+
         // final scoreboard array
         let scoreboard = users.map(u => {
             const id = u._id.toString();
             const IR = irMap[id];
             const PI = piMap[id];
-            const score = (0.6 * (IR / maxIR)) + (0.4 * (PI / maxPI));
+            const formulaScore = (0.6 * (IR / maxIR)) + (0.4 * (PI / maxPI));
+            const points = pointsMap[id] || 0;
 
             return {
                 id,
@@ -85,7 +90,9 @@ class ControlBoard {
                 image: u.image,
                 IR,
                 PI,
-                finalScore: score
+                formulaScore,
+                points,
+                finalScore: formulaScore + points
             };
         });
 
