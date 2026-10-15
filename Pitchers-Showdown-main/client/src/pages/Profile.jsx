@@ -5,14 +5,6 @@ import background from '../assets/background_profile.png';
 import useAuthStore from '../../lib/store';
 import { API_URL } from '../../lib/config';
 
-
-function logout() {
-  useAuthStore.getState().logout();
-  localStorage.removeItem('token');
-  window.location.href = '/login';
-}
-
-
 function InvestmentSection({ title, items, empty }) {
   return (
     <section className='investSection' aria-label={title}>
@@ -153,9 +145,6 @@ export default function Profile() {
         </div>
       </main>
 
-      <button className='logout' onClick={logout}>
-        Logout →
-      </button>
     </div>
   );
-} 
+}

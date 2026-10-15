@@ -5,6 +5,19 @@
   width: 100%;
 }
 
+.logout-nav {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.logout-nav:hover {
+  text-decoration: underline;
+}
+
 .logo {
   height: 6em;
   padding: 1.5em;
