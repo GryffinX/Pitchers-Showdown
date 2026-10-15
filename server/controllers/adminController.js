@@ -152,12 +152,29 @@ const listTeams = async (req, res) => {
             filter.$or = [{ name: re }, { username: re }];
         }
 
-        const [total, teams] = await Promise.all([
-            User.countDocuments(filter),
-            User.find(filter).sort({ [sortField]: order, _id: order }).skip((page - 1) * limit).limit(limit),
-        ]);
+        let total, teams, scores;
+        if (req.query.sort === 'score') {
+            // The score is calculated, not stored, so sort and paginate in memory.
+            // Deleted teams have no score and always come last.
+            let all;
+            [all, scores] = await Promise.all([User.find(filter), teamScores()]);
+            const scoreOf = (t) => (scores[t._id.toString()] ? scores[t._id.toString()].value : null);
+            all.sort((a, b) => {
+                const sa = scoreOf(a), sb = scoreOf(b);
+                if (sa === null || sb === null) return (sa === null) - (sb === null);
+                return (sa - sb) * order || String(b._id).localeCompare(String(a._id));
+            });
+            total = all.length;
+            teams = all.slice((page - 1) * limit, page * limit);
+        } else {
+            [total, teams, scores] = await Promise.all([
+                User.countDocuments(filter),
+                User.find(filter).sort({ [sortField]: order, _id: order }).skip((page - 1) * limit).limit(limit),
+                teamScores(),
+            ]);
+        }
 
-        const [points, scores] = await Promise.all([pointTotals(teams.map(t => t._id)), teamScores()]);
+        const points = await pointTotals(teams.map(t => t._id));
         return res.json({
             teams: teams.map(t => ({
                 ...serializeTeam(t),

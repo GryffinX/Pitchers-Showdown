@@ -280,17 +280,10 @@ export function DeleteTeamModal({ team, onClose, onDeleted }) {
   );
 }
 
-const formatScore = (value) => Number(value).toFixed(3);
-
-// Live game score (admin only), shown next to the team name. Deleted teams are not ranked.
-export function ScoreBadge({ score }) {
-  if (!score) return null;
-  return (
-    <span className="adm-score" title={`Score ${formatScore(score.value)}, rank #${score.rank}`}>
-      {formatScore(score.value)}<span className="adm-score-rank">#{score.rank}</span>
-    </span>
-  );
-}
+// The score as a plain decimal (0.4 stays 0.4, 2 stays 2). Six decimal places is enough to show
+// every real difference while hiding floating-point noise like 0.30000000000000004.
+// eslint-disable-next-line react-refresh/only-export-components
+export const formatScore = (value) => String(Number(Number(value).toFixed(6)));
 
 function InvestmentTable({ rows, column }) {
   if (rows.length === 0) return <EmptyState>None.</EmptyState>;
@@ -327,23 +320,16 @@ export function TeamDetailsModal({ teamId, onClose }) {
       {error ? <ErrorState message={error} /> : !data ? <Spinner /> : (
         <>
           <dl className="adm-details">
-            <div><dt>Team name</dt><dd className="adm-team-cell">{data.team.name} <ScoreBadge score={data.team.score} /></dd></div>
+            <div><dt>Team name</dt><dd>{data.team.name}</dd></div>
             <div>
-              <dt>Score</dt>
-              <dd>
-                {data.team.score
-                  ? <>{formatScore(data.team.score.value)} <span className="adm-muted">· rank #{data.team.score.rank} of {data.rankedTeams}</span></>
-                  : <span className="adm-muted">Not ranked (deleted)</span>}
+              <dt>Points</dt>
+              <dd className="adm-strong" title={data.team.score ? String(data.team.score.value) : undefined}>
+                {data.team.score ? formatScore(data.team.score.value) : <span className="adm-muted">Not scored (deleted)</span>}
               </dd>
             </div>
-            {data.team.score && (
-              <div>
-                <dt>Score breakdown</dt>
-                <dd>{formatScore(data.team.score.formula)} formula <span className="adm-muted">+</span> {data.team.score.points.toLocaleString('en-IN')} points</dd>
-              </div>
-            )}
+            {data.team.score && <div><dt>From the formula</dt><dd>{formatScore(data.team.score.formula)}</dd></div>}
+            <div><dt>Admin points</dt><dd>{formatScore(data.team.points || 0)}</dd></div>
             {data.team.score && <div><dt>Profit from investments</dt><dd>{formatMoney(Math.round(data.team.score.profit))}</dd></div>}
-            <div><dt>Points</dt><dd>{(data.team.points || 0).toLocaleString('en-IN')}</dd></div>
             <div><dt>Username</dt><dd>{data.team.username}</dd></div>
             <div><dt>Status</dt><dd><span className={`adm-badge adm-badge-${data.team.status}`}>{data.team.status}</span>{data.team.deletedAt && <span className="adm-muted adm-small"> {formatDate(data.team.deletedAt)}</span>}</dd></div>
             <div><dt>Remaining balance</dt><dd>{formatMoney(data.team.balance)}</dd></div>
@@ -353,7 +339,7 @@ export function TeamDetailsModal({ teamId, onClose }) {
             <div><dt>Account ID</dt><dd className="adm-mono adm-small">{data.team.id}</dd></div>
           </dl>
           <p className="adm-muted adm-small adm-score-note">
-            Score = 0.6 × (investment received ÷ highest received) + 0.4 × (profit from investments ÷ highest profit) + admin points (revoked points don&apos;t count).
+            Points = 0.6 × (investment received ÷ highest received) + 0.4 × (profit from investments ÷ highest profit) + admin points (revoked points don&apos;t count).
             Profit counts each investment × (that team&apos;s investment received ÷ average received). Recalculated live; only admins see it.
           </p>
           <div className="adm-grid-2 adm-grid-tight">
@@ -445,7 +431,7 @@ function PointsRow({ award, editable, busy, onSave, onToggle }) {
 }
 
 // Give or take points by hand. Every entry can be edited, revoked (no longer counted) and restored.
-export function PointsModal({ team, onClose, onChanged }) {
+export function PointsModal({ team, onClose }) {
   const notify = useToast();
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState('');
@@ -458,10 +444,7 @@ export function PointsModal({ team, onClose, onChanged }) {
     adminRequest(`/teams/${team.id}/points`).then(setData).catch(err => setLoadError(err.message));
   }, [team.id]);
 
-  const apply = (result) => {
-    setData(result);
-    onChanged(result.total);
-  };
+  const apply = setData;
 
   const add = async (e) => {
     e.preventDefault();
@@ -518,7 +501,7 @@ export function PointsModal({ team, onClose, onChanged }) {
           <div className="adm-muted">{team.username}</div>
         </div>
         <div className="adm-points-total">
-          <span className="adm-muted adm-small">Total points</span>
+          <span className="adm-muted adm-small">Admin points</span>
           <strong>{data ? data.total.toLocaleString('en-IN') : '—'}</strong>
         </div>
       </div>

@@ -442,6 +442,28 @@ test('admin team list and details show the live score from the leaderboard formu
     after = (await call('GET', `/api/admin/teams/${lowest._id}`, { token: adminToken })).body.team.score;
     assert.ok(Math.abs(after.value - (before.formula - 2)) < 1e-9, 'revoked points are not added');
 
+    // Ordering by score, highest first or lowest first, across pages; deleted teams last
+    const values = async (order, extra = '') => {
+        const rows = [];
+        for (let page = 1; ; page++) {
+            const r = await call('GET', `/api/admin/teams?status=all&sort=score&order=${order}&limit=2&page=${page}${extra}`, { token: adminToken });
+            assert.equal(r.status, 200);
+            rows.push(...r.body.teams);
+            if (page >= r.body.pages) return rows;
+        }
+    };
+    for (const order of ['desc', 'asc']) {
+        const rows = await values(order);
+        const scored = rows.filter(r => r.score).map(r => r.score.value);
+        const sorted = [...scored].sort((a, b) => (order === 'desc' ? b - a : a - b));
+        assert.deepEqual(scored, sorted, `sorted ${order}`);
+        const firstDeleted = rows.findIndex(r => !r.score);
+        if (firstDeleted !== -1) assert.ok(rows.slice(firstDeleted).every(r => !r.score), 'deleted teams last');
+        assert.equal(rows.length, await User.countDocuments(), 'every team appears once');
+    }
+    const searched = await values('desc', '&q=score');
+    assert.deepEqual(searched.map(r => r.username), ['score3', 'score2', 'score1'], 'search works with score order');
+
     const prof = (await call('GET', '/api/profile', { playerToken: tokens[2] })).body;
     assert.deepEqual(Object.keys(prof).sort(), ['balance', 'investments', 'name']);
 

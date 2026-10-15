@@ -3,18 +3,20 @@ import { adminRequest, formatDate, formatMoney } from '../adminApi';
 import { Spinner, ErrorState, EmptyState } from '../components/States';
 import Pagination from '../components/Pagination';
 import {
-  CreateTeamModal, RenameTeamModal, ResetPasswordModal, DeleteTeamModal, TeamDetailsModal, PointsModal, ScoreBadge,
+  CreateTeamModal, RenameTeamModal, ResetPasswordModal, DeleteTeamModal, TeamDetailsModal, PointsModal, formatScore,
 } from '../components/TeamModals';
 
+// Points = the live score: leaderboard formula + admin points. Sorting by it gives the ranking.
 const COLUMNS = [
   { key: 'name', label: 'Team' },
   { key: 'balance', label: 'Balance', align: 'right' },
   { key: 'createdAt', label: 'Created' },
+  { key: 'score', label: 'Points', align: 'right' },
 ];
 
 export default function AdminTeams() {
   const [search, setSearch] = useState('');
-  const [query, setQuery] = useState({ q: '', status: 'active', sort: 'createdAt', order: 'desc', page: 1 });
+  const [query, setQuery] = useState({ q: '', status: 'active', sort: 'score', order: 'desc', page: 1 });
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -44,7 +46,8 @@ export default function AdminTeams() {
   const sortBy = (key) => setQuery(q => ({
     ...q,
     sort: key,
-    order: q.sort === key && q.order === 'asc' ? 'desc' : 'asc',
+    // highest points first when switching to the Points column; otherwise A→Z / oldest first
+    order: q.sort === key ? (q.order === 'asc' ? 'desc' : 'asc') : (key === 'score' ? 'desc' : 'asc'),
     page: 1,
   }));
 
@@ -94,7 +97,6 @@ export default function AdminTeams() {
                         </button>
                       </th>
                     ))}
-                    <th className="adm-right">Points</th>
                     <th>Status</th>
                     <th>ID</th>
                     <th className="adm-right">Actions</th>
@@ -104,15 +106,14 @@ export default function AdminTeams() {
                   {data.teams.map(team => (
                     <tr key={team.id}>
                       <td>
-                        <div className="adm-team-cell">
-                          <button className="adm-team-link" onClick={open('details', team)}>{team.name}</button>
-                          <ScoreBadge score={team.score} />
-                        </div>
+                        <button className="adm-team-link" onClick={open('details', team)}>{team.name}</button>
                         <div className="adm-muted adm-small">{team.username}</div>
                       </td>
                       <td className="adm-right adm-nowrap">{formatMoney(team.balance)}</td>
                       <td className="adm-nowrap">{formatDate(team.createdAt)}</td>
-                      <td className="adm-right adm-nowrap">{(team.points || 0).toLocaleString('en-IN')}</td>
+                      <td className="adm-right adm-nowrap adm-strong" title={team.score ? String(team.score.value) : 'Deleted teams are not scored'}>
+                        {team.score ? formatScore(team.score.value) : <span className="adm-muted">—</span>}
+                      </td>
                       <td><span className={`adm-badge adm-badge-${team.status}`}>{team.status}</span></td>
                       <td className="adm-mono adm-muted adm-small" title={team.id}>…{String(team.id).slice(-6)}</td>
                       <td className="adm-right">
@@ -151,8 +152,7 @@ export default function AdminTeams() {
       {modal && modal.type === 'points' && (
         <PointsModal
           team={modal.team}
-          onClose={() => { closeModal(); load(); }} // scores and ranks depend on points
-          onChanged={points => setData(d => ({ ...d, teams: d.teams.map(t => (t.id === modal.team.id ? { ...t, points } : t)) }))}
+          onClose={() => { closeModal(); load(); }} // the score and ordering depend on admin points
         />
       )}
       {modal && modal.type === 'reset' && <ResetPasswordModal team={modal.team} onClose={closeModal} />}
