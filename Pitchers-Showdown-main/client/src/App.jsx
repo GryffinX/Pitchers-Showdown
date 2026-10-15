@@ -1,8 +1,9 @@
 import './App.css'
 
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import PrivateRoute from './components/PrivateRouter';
+import useAuthStore from '../lib/store';
 import Homepage from './pages/Homepage'
 import Login from './pages/Login';
 import Profile from './pages/Profile';
@@ -17,7 +18,15 @@ const AdminTeams = lazy(() => import('./admin/pages/AdminTeams'));
 
 function PlayerHeader() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const isLoggedIn = useAuthStore((state) => state.auth.is_logged);
   if (pathname === '/admin' || pathname.startsWith('/admin/')) return null;
+
+  const logout = () => {
+    useAuthStore.getState().logout();
+    localStorage.removeItem('token');
+    navigate('/login', { replace: true });
+  };
 
   return (
     <header className='fixed top-0 start-0 end-0 py-5 px-10 bg-[rgba(0,0,0,0.75)] z-999 flex justify-center sm:justify-end'>
@@ -25,6 +34,7 @@ function PlayerHeader() {
         <Link to='/'>Home</Link>
         <Link to='/teams'>Teams</Link>
         <Link to='/profile'>Investments</Link>
+        {isLoggedIn && <button className='logout-nav' onClick={logout}>Logout</button>}
       </nav>
     </header>
   );
