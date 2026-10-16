@@ -632,15 +632,16 @@ export function TeamDetailsModal({ teamId, onClose, onRevert }) {
 }
 
 // Mirrors the limits in server/controllers/adminController.js
-const MAX_POINTS = 100000;
+// Bonus points use the formula's 0-1 scale: each entry and a team's total stay between -1 and 1
+const MAX_POINTS = 1;
 const MAX_REASON = 120;
 const checkPoints = (text) => {
   const n = Number(text);
-  if (text.trim() === '' || !Number.isInteger(n) || n === 0 || Math.abs(n) > MAX_POINTS)
-    return `Enter a whole number between -${MAX_POINTS.toLocaleString('en-IN')} and ${MAX_POINTS.toLocaleString('en-IN')}, not 0.`;
+  if (text.trim() === '' || !Number.isFinite(n) || n === 0 || Math.abs(n) > MAX_POINTS)
+    return `Enter a number between -${MAX_POINTS} and ${MAX_POINTS}, not 0 (e.g. 0.25 or -0.5).`;
   return '';
 };
-const formatPoints = (n) => `${n > 0 ? '+' : ''}${Number(n).toLocaleString('en-IN')}`;
+const formatPoints = (n) => `${n > 0 ? '+' : ''}${formatScore(n)}`;
 
 function PointsRow({ award, editable, busy, onSave, onToggle }) {
   const [editing, setEditing] = useState(false);
@@ -667,7 +668,7 @@ function PointsRow({ award, editable, busy, onSave, onToggle }) {
       <tr>
         <td colSpan={4}>
           <form className="adm-points-edit" onSubmit={save} noValidate>
-            <input className="adm-input adm-points-input" type="number" step="1" value={points} onChange={e => setPoints(e.target.value)} disabled={busy} aria-label="Points" autoFocus />
+            <input className="adm-input adm-points-input" type="number" step="any" min={-MAX_POINTS} max={MAX_POINTS} value={points} onChange={e => setPoints(e.target.value)} disabled={busy} aria-label="Points" autoFocus />
             <input className="adm-input" value={reason} maxLength={MAX_REASON} onChange={e => setReason(e.target.value)} disabled={busy} placeholder="Reason (optional)" aria-label="Reason" />
             <button className="adm-btn adm-btn-primary adm-btn-sm" type="submit" disabled={busy}>Save</button>
             <button className="adm-btn adm-btn-ghost adm-btn-sm" type="button" onClick={() => setEditing(false)} disabled={busy}>Cancel</button>
@@ -775,15 +776,15 @@ export function PointsModal({ team, onClose }) {
         </div>
         <div className="adm-points-total">
           <span className="adm-muted adm-small">Admin points</span>
-          <strong>{data ? data.total.toLocaleString('en-IN') : '—'}</strong>
+          <strong>{data ? formatScore(data.total) : '—'}</strong>
         </div>
       </div>
 
       {editable ? (
         <form className="adm-points-add" onSubmit={add} noValidate>
           <label className="adm-field">
-            <span>Points <em className="adm-muted">negative takes away</em></span>
-            <input className="adm-input adm-points-input" type="number" step="1" placeholder="e.g. 50" value={points} onChange={e => setPoints(e.target.value)} disabled={busy || !data} autoFocus />
+            <span>Points <em className="adm-muted">-1 to 1, negative takes away</em></span>
+            <input className="adm-input adm-points-input" type="number" step="any" min={-MAX_POINTS} max={MAX_POINTS} placeholder="e.g. 0.25" value={points} onChange={e => setPoints(e.target.value)} disabled={busy || !data} autoFocus />
           </label>
           <label className="adm-field adm-points-reason">
             <span>Reason <em className="adm-muted">optional</em></span>
@@ -811,7 +812,7 @@ export function PointsModal({ team, onClose }) {
           </table>
         </div>
       )}
-      <p className="adm-muted adm-small adm-points-note">Revoked entries stay in the history but don&apos;t count towards the total. Restore one to count it again.</p>
+      <p className="adm-muted adm-small adm-points-note">Each entry and the team&apos;s total stay between -1 and 1. Revoked entries stay in the history but don&apos;t count towards the total. Restore one to count it again.</p>
     </Modal>
   );
 }

@@ -340,44 +340,58 @@ test('admin awards points that can be edited, revoked and restored', async () =>
     assert.equal(empty.body.total, 0);
     assert.deepEqual(empty.body.awards, []);
 
-    assert.equal((await award({ points: 50, reason: '  Best pitch deck  ' })).status, 201);
-    let res = await award({ points: -10, reason: 'Late' });
+    const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} vs ${b}`);
+    assert.equal((await award({ points: 0.5, reason: '  Best pitch deck  ' })).status, 201);
+    let res = await award({ points: -0.1, reason: 'Late' });
     assert.equal(res.status, 201);
-    assert.equal(res.body.total, 40);
+    near(res.body.total, 0.4, 'total');
     const [late, best] = res.body.awards; // newest first
     assert.equal(best.reason, 'Best pitch deck');
 
-    // Bad input changes nothing
-    for (const body of [{ points: 0 }, { points: 1.5 }, { points: '5' }, { points: 1e6 }, { points: 5, reason: 'x'.repeat(121) }])
+    // Bad input changes nothing: each entry is a number from -1 to 1, not 0
+    for (const body of [{ points: 0 }, { points: 1.5 }, { points: -1.01 }, { points: 2 }, { points: '0.5' }, { points: 0.2, reason: 'x'.repeat(121) }])
         assert.equal((await award(body)).status, 400, JSON.stringify(body));
     assert.equal((await edit(best.id, { team: 'x' })).status, 400);
     assert.equal((await edit(best.id, { revoked: 'yes' })).status, 400);
-    assert.equal((await edit('nope', { points: 1 })).status, 400);
-    assert.equal((await edit(new mongoose.Types.ObjectId(), { points: 1 })).status, 404);
-    assert.equal((await call('POST', `/api/admin/teams/${team._id}/points`, { body: { points: 5 } })).status, 401, 'admin only');
+    assert.equal((await edit(best.id, { points: 5 })).status, 400);
+    assert.equal((await edit('nope', { points: 0.1 })).status, 400);
+    assert.equal((await edit(new mongoose.Types.ObjectId(), { points: 0.1 })).status, 404);
+    assert.equal((await call('POST', `/api/admin/teams/${team._id}/points`, { body: { points: 0.5 } })).status, 401, 'admin only');
 
-    res = await edit(best.id, { points: 70, reason: 'Best pitch deck (final)' });
+    // The team's total must stay within -1..1 too
+    const over = await award({ points: 0.7 });
+    assert.equal(over.status, 400);
+    assert.match(over.body.error, /between -1 and 1/);
+
+    res = await edit(best.id, { points: 0.8, reason: 'Best pitch deck (final)' });
     assert.equal(res.status, 200);
-    assert.equal(res.body.total, 60);
-
+    near(res.body.total, 0.7, 'edited total');
     assert.ok(res.body.awards.find(a => a.id === best.id).editedAt, 'changing the value marks it edited');
 
     res = await edit(late.id, { revoked: true });
-    assert.equal(res.body.total, 70);
+    near(res.body.total, 0.8, 'after revoke');
     assert.equal(res.body.awards.find(a => a.id === late.id).revoked, true);
     assert.equal(res.body.awards.find(a => a.id === late.id).editedAt, null, 'revoking is not an edit');
 
     const listed = await call('GET', '/api/admin/teams', { token: adminToken });
-    assert.equal(listed.body.teams.find(t => t.username === 'pointy').points, 70);
-    assert.equal((await call('GET', `/api/admin/teams/${team._id}`, { token: adminToken })).body.team.points, 70);
+    near(listed.body.teams.find(t => t.username === 'pointy').points, 0.8, 'list');
+    near((await call('GET', `/api/admin/teams/${team._id}`, { token: adminToken })).body.team.points, 0.8, 'details');
 
     res = await edit(late.id, { revoked: false });
-    assert.equal(res.body.total, 60);
+    near(res.body.total, 0.7, 'after restore');
+
+    // Exactly 1 is allowed; going past it by editing or by revoking a negative entry is not
+    res = await award({ points: 0.3, reason: 'Audience vote' });
+    assert.equal(res.status, 201);
+    near(res.body.total, 1, 'at the limit');
+    assert.equal((await edit(late.id, { points: 0.1 })).status, 400);
+    assert.equal((await edit(late.id, { revoked: true })).status, 400);
+    near((await call('GET', `/api/admin/teams/${team._id}/points`, { token: adminToken })).body.total, 1, 'unchanged');
 
     // Deleted teams are read-only
     await User.updateOne({ _id: team._id }, { deletedAt: new Date() });
-    assert.equal((await award({ points: 5 })).status, 409);
-    assert.equal((await edit(best.id, { points: 1 })).status, 409);
+    assert.equal((await award({ points: 0.1 })).status, 409);
+    assert.equal((await edit(best.id, { points: 0.1 })).status, 409);
 
     await User.deleteOne({ _id: team._id });
 });
@@ -451,19 +465,19 @@ test('admin team list and details show the live score from the leaderboard formu
     // Admin points are added to the score as-is; the formula part does not change
     const lowest = teams[0];
     const before = s.score1;
-    const award = await call('POST', `/api/admin/teams/${lowest._id}/points`, { token: adminToken, body: { points: 5 } });
-    await call('POST', `/api/admin/teams/${lowest._id}/points`, { token: adminToken, body: { points: -2 } });
+    const award = await call('POST', `/api/admin/teams/${lowest._id}/points`, { token: adminToken, body: { points: 1 } });
+    await call('POST', `/api/admin/teams/${lowest._id}/points`, { token: adminToken, body: { points: -0.25 } });
     let after = (await call('GET', `/api/admin/teams/${lowest._id}`, { token: adminToken })).body.team.score;
-    assert.equal(after.points, 3);
+    assert.ok(Math.abs(after.points - 0.75) < 1e-9);
     assert.ok(Math.abs(after.formula - before.formula) < 1e-9, 'formula part is unchanged');
-    assert.ok(Math.abs(after.value - (before.formula + 3)) < 1e-9, 'score = formula + points');
-    assert.equal(after.rank, 1, 'points can move a team up the ranking');
+    assert.ok(Math.abs(after.value - (before.formula + 0.75)) < 1e-9, 'score = formula + points');
+    assert.ok(after.rank < before.rank, 'points can move a team up the ranking');
 
     // Revoked points stop counting
-    const plus5 = award.body.awards.find(a => a.points === 5);
-    await call('PATCH', `/api/admin/points/${plus5.id}`, { token: adminToken, body: { revoked: true } });
+    const plusOne = award.body.awards.find(a => a.points === 1);
+    await call('PATCH', `/api/admin/points/${plusOne.id}`, { token: adminToken, body: { revoked: true } });
     after = (await call('GET', `/api/admin/teams/${lowest._id}`, { token: adminToken })).body.team.score;
-    assert.ok(Math.abs(after.value - (before.formula - 2)) < 1e-9, 'revoked points are not added');
+    assert.ok(Math.abs(after.value - (before.formula - 0.25)) < 1e-9, 'revoked points are not added');
 
     // Ordering by score, highest first or lowest first, across pages; deleted teams last
     const values = async (order, extra = '') => {

@@ -373,13 +373,29 @@ const revertInvestments = (direction) => async (req, res) => {
 
 // --- Points ---
 
-const MAX_POINTS = 100000;
+// Bonus points sit on the same scale as the formula score (0 to 1): each entry, and a team's
+// total of active entries, must stay between -1 and 1. Decimals are allowed.
+const MAX_POINTS = 1;
 const MAX_REASON = 120;
+const EPSILON = 1e-9;   // tolerance for floating-point sums such as 0.1 + 0.2
 
 const validatePoints = (value) => {
-    if (typeof value !== 'number' || !Number.isInteger(value) || value === 0 || Math.abs(value) > MAX_POINTS)
-        throw new ValidationError(`Points must be a whole number between -${MAX_POINTS} and ${MAX_POINTS}, not 0`);
+    if (typeof value !== 'number' || !Number.isFinite(value) || value === 0 || Math.abs(value) > MAX_POINTS)
+        throw new ValidationError(`Points must be a number between -${MAX_POINTS} and ${MAX_POINTS}, not 0`);
     return value;
+};
+
+const activeTotal = async (teamId, excludeId) => {
+    const match = { team: teamId, revokedAt: null };
+    if (excludeId) match._id = { $ne: excludeId };
+    const [row] = await PointAward.aggregate([{ $match: match }, { $group: { _id: null, total: { $sum: '$points' } } }]);
+    return row ? row.total : 0;
+};
+
+// Refuse a change that takes the team's total outside -1..1 (or further outside, for older data)
+const checkTotal = (before, after) => {
+    if (Math.abs(after) > MAX_POINTS + EPSILON && Math.abs(after) > Math.abs(before) + EPSILON)
+        throw new ValidationError(`This would make the team's total bonus ${Number(after.toFixed(6))}; it must stay between -${MAX_POINTS} and ${MAX_POINTS}`);
 };
 
 const validateReason = (value) => {
@@ -423,7 +439,12 @@ const awardPoints = async (req, res) => {
         const team = await findTeam(req.params.id);
         if (team.deletedAt) throw new ValidationError('Deleted teams cannot get points', 409);
 
-        await PointAward.create({ team: team._id, points: validatePoints(body.points), reason: validateReason(body.reason) });
+        const points = validatePoints(body.points);
+        const reason = validateReason(body.reason);
+        const before = await activeTotal(team._id);
+        checkTotal(before, before + points);
+
+        await PointAward.create({ team: team._id, points, reason });
         return res.status(201).json(await pointsResponse(team));
     } catch (err) {
         return sendError(res, err, 'Admin award points');
@@ -450,6 +471,12 @@ const updatePoints = async (req, res) => {
 
         const points = 'points' in body ? validatePoints(body.points) : award.points;
         const reason = 'reason' in body ? validateReason(body.reason) : award.reason;
+
+        const wasActive = !award.revokedAt;
+        const willBeActive = typeof body.revoked === 'boolean' ? !body.revoked : wasActive;
+        const others = await activeTotal(team._id, award._id);
+        checkTotal(others + (wasActive ? award.points : 0), others + (willBeActive ? points : 0));
+
         if (points !== award.points || reason !== award.reason) {
             award.points = points;
             award.reason = reason;
