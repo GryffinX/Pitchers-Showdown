@@ -356,3 +356,10 @@ html:has(.admin-root) body { overflow: visible; }
 .adm-calc-sub { margin-top: 18px !important; }
 .adm-calc-gap { margin-top: 18px; }
 @media (max-width: 600px) { .adm-calc-inputs { grid-template-columns: 1fr; } }
+
+/* Reverting investments */
+.adm-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.adm-section-head h3 { margin: 0 !important; }
+.adm-check-col { width: 36px; }
+.adm-check-col input { width: 16px; height: 16px; accent-color: var(--adm-danger); cursor: pointer; }
+.adm-row-off td:not(.adm-check-col) { opacity: .45; }

@@ -26,6 +26,10 @@ router.patch('/teams/:id', admin.updateTeam);
 router.post('/teams/:id/reset-password', admin.resetPassword);
 router.delete('/teams/:id', admin.deleteTeam);
 
+// Undo investments and refund the investors
+router.post('/teams/:id/revert-received', admin.revertReceived);
+router.post('/teams/:id/revert-made', admin.revertMade);
+
 router.get('/teams/:id/points', admin.listPoints);
 router.post('/teams/:id/points', admin.awardPoints);
 router.patch('/points/:awardId', admin.updatePoints);

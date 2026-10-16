@@ -414,7 +414,167 @@ function ScoreCalculation({ calc }) {
   );
 }
 
-export function TeamDetailsModal({ teamId, onClose }) {
+const REVERT_TEXT = {
+  received: {
+    title: 'Revert investments received',
+    list: 'investmentsReceived',
+    column: 'Investor',
+    explain: (team) => <>Other teams&apos; investments into <strong>{team.name}</strong> are removed and <strong>each investor gets its amount back</strong>.</>,
+  },
+  made: {
+    title: 'Revert investments made',
+    list: 'investmentsMade',
+    column: 'Invested in',
+    explain: (team) => <><strong>{team.name}</strong>&apos;s investments into other teams are removed and <strong>{team.name} gets the amount back</strong>.</>,
+  },
+};
+
+// Undo investments on one side of a team and refund the investors. direction: 'received' | 'made'
+export function RevertInvestmentsModal({ team, direction, onClose, onDone }) {
+  const notify = useToast();
+  const text = REVERT_TEXT[direction];
+  const [rows, setRows] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [typed, setTyped] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    adminRequest(`/teams/${team.id}`)
+      .then(data => {
+        setRows(data[text.list]);
+        setSelected(new Set(data[text.list].map(r => r.id)));
+      })
+      .catch(err => setError(err.message));
+  }, [team.id, text.list]);
+
+  const toggle = (id) => setSelected(s => {
+    const next = new Set(s);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const allSelected = rows && rows.length > 0 && selected.size === rows.length;
+  const chosen = rows ? rows.filter(r => selected.has(r.id)) : [];
+  const total = chosen.reduce((sum, r) => sum + r.amt, 0);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (typed !== team.username || chosen.length === 0) return;
+    setBusy(true);
+    setError('');
+    try {
+      const data = await adminRequest(`/teams/${team.id}/revert-${direction}`, {
+        method: 'POST',
+        body: { investmentIds: chosen.map(r => r.id), confirmUsername: typed },
+      });
+      setResult(data);
+      notify(`Reverted ${data.reverted} investment${data.reverted === 1 ? '' : 's'}, refunded ${formatMoney(data.refunded)}`);
+      onDone();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (result) {
+    return (
+      <Modal title={text.title} onClose={onClose} wide footer={<button className="adm-btn adm-btn-primary" onClick={onClose}>Done</button>}>
+        <div className="adm-alert adm-alert-info">
+          Reverted {result.reverted} investment{result.reverted === 1 ? '' : 's'} and refunded {formatMoney(result.refunded)}.
+          {result.skipped > 0 && ` ${result.skipped} had already been reverted and were skipped.`}
+        </div>
+        {result.refunds.length > 0 && (
+          <div className="adm-table-wrap">
+            <table className="adm-table adm-table-compact">
+              <thead><tr><th>Refunded to</th><th className="adm-right">Refund</th><th className="adm-right">New balance</th></tr></thead>
+              <tbody>
+                {result.refunds.map(r => (
+                  <tr key={r.id}>
+                    <td>{r.name} <span className="adm-muted">{r.username}</span></td>
+                    <td className="adm-right">{formatMoney(r.amount)}</td>
+                    <td className="adm-right">{formatMoney(r.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal
+      title={text.title}
+      onClose={onClose}
+      wide
+      busy={busy}
+      footer={<>
+        <button className="adm-btn adm-btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="adm-btn adm-btn-danger" type="submit" form="revert-investments" disabled={busy || !rows || chosen.length === 0 || typed !== team.username}>
+          {busy ? 'Reverting…' : `Revert ${chosen.length} (${formatMoney(total)})`}
+        </button>
+      </>}
+    >
+      <form id="revert-investments" className="adm-form" onSubmit={submit} noValidate>
+        {error && <div className="adm-alert adm-alert-error" role="alert">{error}</div>}
+        <div className="adm-target adm-target-danger">
+          <div className="adm-strong">{team.name}</div>
+          <div className="adm-muted">{team.username}</div>
+        </div>
+        <ul className="adm-bullets">
+          <li>{text.explain(team)}</li>
+          <li>Points are recalculated straight away. The investor can invest in that team again afterwards.</li>
+          <li>This can&apos;t be undone from the dashboard.</li>
+        </ul>
+
+        {!rows ? (!error && <Spinner />) : rows.length === 0 ? <EmptyState>No investments to revert.</EmptyState> : (
+          <div className="adm-table-wrap">
+            <table className="adm-table adm-table-compact">
+              <thead>
+                <tr>
+                  <th className="adm-check-col">
+                    <input type="checkbox" aria-label="Select all" checked={allSelected} disabled={busy}
+                      onChange={() => setSelected(allSelected ? new Set() : new Set(rows.map(r => r.id)))} />
+                  </th>
+                  <th>{text.column}</th>
+                  <th className="adm-right">Amount</th>
+                  <th>Refund goes to</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={r.id} className={selected.has(r.id) ? '' : 'adm-row-off'}>
+                    <td className="adm-check-col">
+                      <input type="checkbox" aria-label={`Select ${r.team ? r.team.name : 'investment'}`} checked={selected.has(r.id)} disabled={busy} onChange={() => toggle(r.id)} />
+                    </td>
+                    <td>
+                      {r.team ? <>{r.team.name} <span className="adm-muted">{r.team.username}</span></> : <span className="adm-muted">Unknown team</span>}
+                      {r.team && r.team.deleted && <span className="adm-badge adm-badge-failure adm-badge-inline">deleted</span>}
+                    </td>
+                    <td className="adm-right">{formatMoney(r.amt)}</td>
+                    <td>{direction === 'received' ? (r.team ? r.team.name : 'the investor') : team.name}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {rows && rows.length > 0 && (
+          <label className="adm-field adm-calc-gap">
+            <span>Type <strong>{team.username}</strong> to confirm</span>
+            <input className="adm-input" value={typed} autoComplete="off" onChange={e => setTyped(e.target.value)} disabled={busy} />
+          </label>
+        )}
+      </form>
+    </Modal>
+  );
+}
+
+export function TeamDetailsModal({ teamId, onClose, onRevert }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
 
@@ -447,11 +607,21 @@ export function TeamDetailsModal({ teamId, onClose }) {
             : <div className="adm-alert adm-alert-info adm-calc-gap">Deleted teams are not scored. Admin points on record: {formatScore(data.team.points || 0)}.</div>}
           <div className="adm-grid-2 adm-grid-tight">
             <section>
-              <h3>Invested in ({data.investmentsMade.length})</h3>
+              <div className="adm-section-head">
+                <h3>Invested in ({data.investmentsMade.length})</h3>
+                {onRevert && data.investmentsMade.length > 0 && (
+                  <button className="adm-btn adm-btn-danger-ghost adm-btn-sm" onClick={() => onRevert('made')}>Revert…</button>
+                )}
+              </div>
               <InvestmentTable rows={data.investmentsMade} column="Team" />
             </section>
             <section>
-              <h3>Received from ({data.investmentsReceived.length})</h3>
+              <div className="adm-section-head">
+                <h3>Received from ({data.investmentsReceived.length})</h3>
+                {onRevert && data.investmentsReceived.length > 0 && (
+                  <button className="adm-btn adm-btn-danger-ghost adm-btn-sm" onClick={() => onRevert('received')}>Revert…</button>
+                )}
+              </div>
               <InvestmentTable rows={data.investmentsReceived} column="Investor" />
             </section>
           </div>

@@ -326,6 +326,51 @@ const deleteTeam = async (req, res) => {
     }
 };
 
+// --- Reverting investments ---
+
+// direction 'received': investments other teams made into this team (each investor is refunded)
+// direction 'made': investments this team made into others (this team is refunded)
+const REVERT_SIDE = { received: 'pitcher', made: 'user' };
+
+const revertInvestments = (direction) => async (req, res) => {
+    try {
+        const body = req.body || {};
+        const team = await findTeam(req.params.id);
+        if (body.confirmUsername !== team.username)
+            throw new ValidationError('Confirmation username does not match this team');
+
+        const ids = body.investmentIds;
+        if (!Array.isArray(ids) || ids.length === 0 || ids.length > 1000 || !ids.every(id => typeof id === 'string' && mongoose.isValidObjectId(id)))
+            throw new ValidationError('Choose at least one investment to revert');
+
+        const refunds = {};   // investor id -> amount given back
+        let reverted = 0;
+        for (const id of [...new Set(ids)]) {
+            // Deleting first means two admins reverting at once can never refund the same investment twice
+            const inv = await Investment.findOneAndDelete({ _id: id, [REVERT_SIDE[direction]]: team._id });
+            if (!inv) continue;   // already reverted, or not on this side of this team
+            try {
+                await User.updateOne({ _id: inv.user }, { $inc: { Rbalance: inv.amt } });
+            } catch (err) {
+                await Investment.collection.insertOne(inv.toObject());   // put it back so nothing is lost
+                throw err;
+            }
+            refunds[inv.user] = (refunds[inv.user] || 0) + inv.amt;
+            reverted++;
+        }
+
+        const investors = await User.find({ _id: { $in: Object.keys(refunds) } }).select('name username Rbalance');
+        return res.json({
+            reverted,
+            skipped: new Set(ids).size - reverted,
+            refunded: Object.values(refunds).reduce((a, b) => a + b, 0),
+            refunds: investors.map(u => ({ id: u._id, name: u.name || u.username, username: u.username, amount: refunds[u._id], balance: u.Rbalance })),
+        });
+    } catch (err) {
+        return sendError(res, err, `Admin revert ${direction} investments`);
+    }
+};
+
 // --- Points ---
 
 const MAX_POINTS = 100000;
@@ -424,4 +469,6 @@ module.exports = {
     login, logout, me, stats,
     listTeams, getTeam, createTeam: createTeamHandler, updateTeam, resetPassword, deleteTeam,
     listPoints, awardPoints, updatePoints,
+    revertReceived: revertInvestments('received'),
+    revertMade: revertInvestments('made'),
 };

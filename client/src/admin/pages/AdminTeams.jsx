@@ -3,7 +3,7 @@ import { adminRequest, formatDate, formatMoney } from '../adminApi';
 import { Spinner, ErrorState, EmptyState } from '../components/States';
 import Pagination from '../components/Pagination';
 import {
-  CreateTeamModal, RenameTeamModal, ResetPasswordModal, DeleteTeamModal, TeamDetailsModal, PointsModal, formatScore,
+  CreateTeamModal, RenameTeamModal, ResetPasswordModal, DeleteTeamModal, TeamDetailsModal, PointsModal, RevertInvestmentsModal, formatScore,
 } from '../components/TeamModals';
 
 // Points = the live score: leaderboard formula + admin points. Sorting by it gives the ranking.
@@ -138,7 +138,21 @@ export default function AdminTeams() {
       )}
 
       {modal && modal.type === 'create' && <CreateTeamModal onClose={closeModal} onCreated={load} />}
-      {modal && modal.type === 'details' && <TeamDetailsModal teamId={modal.team.id} onClose={closeModal} />}
+      {modal && modal.type === 'details' && (
+        <TeamDetailsModal
+          teamId={modal.team.id}
+          onClose={closeModal}
+          onRevert={direction => setModal({ type: 'revert', team: modal.team, direction })}
+        />
+      )}
+      {modal && modal.type === 'revert' && (
+        <RevertInvestmentsModal
+          team={modal.team}
+          direction={modal.direction}
+          onClose={() => setModal({ type: 'details', team: modal.team })} // back to the team's details
+          onDone={load} // balances and points change
+        />
+      )}
       {modal && modal.type === 'rename' && (
         <RenameTeamModal
           team={modal.team}

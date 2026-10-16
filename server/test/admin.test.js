@@ -494,6 +494,67 @@ test('admin team list and details show the live score from the leaderboard formu
     await User.deleteMany({ _id: { $in: teams.map(t => t._id) } });
 });
 
+test('admin reverts investments received by a team or made by a team, refunding the investors', async () => {
+    const teams = [];
+    for (const n of [1, 2, 3]) teams.push(await new User({ username: `rev${n}`, name: `Rev ${n}`, password: 'password', desc: ' ', ppt: ' ' }).save());
+    const tok = [];
+    for (const n of [1, 2, 3]) tok.push((await playerLogin(`rev${n}`, 'password')).body.jwtToken);
+    const invest = (i, j, amt) => call('POST', `/api/business/${teams[j]._id}`, { playerToken: tok[i], body: { amt } });
+    for (const [i, j, amt] of [[0, 2, 1000], [1, 2, 500], [2, 0, 700], [2, 1, 300]]) assert.equal((await invest(i, j, amt)).status, 200);
+    const bal = async (i) => (await User.findById(teams[i]._id)).Rbalance;
+    const inv = (i, j) => Investment.findOne({ user: teams[i]._id, pitcher: teams[j]._id });
+    const revert = (dir, i, ids, confirm = teams[i].username, opts = {}) =>
+        call('POST', `/api/admin/teams/${teams[i]._id}/revert-${dir}`, { token: adminToken, body: { investmentIds: ids.map(String), confirmUsername: confirm }, ...opts });
+    assert.deepEqual([await bal(0), await bal(1), await bal(2)], [6000, 6500, 6000]);
+
+    // Guards: confirmation, a selection, admin only
+    const r1to3 = (await inv(0, 2))._id;
+    assert.equal((await revert('received', 2, [r1to3], 'wrong')).status, 400);
+    assert.equal((await revert('received', 2, [])).status, 400);
+    assert.equal((await revert('received', 2, ['nope'])).status, 400);
+    assert.equal((await call('POST', `/api/admin/teams/${teams[2]._id}/revert-received`, { playerToken: tok[0], body: { investmentIds: [String(r1to3)], confirmUsername: 'rev3' } })).status, 401);
+
+    // An investment on the other side of the team is ignored
+    const r3to1 = (await inv(2, 0))._id;
+    let res = await revert('received', 2, [r3to1]);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.reverted, 0);
+    assert.equal(res.body.skipped, 1);
+    assert.ok(await inv(2, 0), 'not reverted');
+
+    // Received: revert one of the two investments into rev3; that investor gets its money back
+    res = await revert('received', 2, [r1to3]);
+    assert.equal(res.body.reverted, 1);
+    assert.equal(res.body.refunded, 1000);
+    assert.deepEqual(res.body.refunds.map(r => [r.username, r.amount, r.balance]), [['rev1', 1000, 7000]]);
+    assert.equal(await inv(0, 2), null);
+    assert.ok(await inv(1, 2), 'the other investment is kept');
+    assert.deepEqual([await bal(0), await bal(1), await bal(2)], [7000, 6500, 6000], 'only the investor is refunded');
+
+    // Reverting again, even twice at the same time, never refunds twice
+    const r2to3 = (await inv(1, 2))._id;
+    const both = await Promise.all([revert('received', 2, [r2to3]), revert('received', 2, [r2to3])]);
+    assert.equal(both.reduce((s, r) => s + r.body.reverted, 0), 1);
+    assert.equal(await bal(1), 7000);
+    assert.equal((await revert('received', 2, [r1to3])).body.reverted, 0);
+    assert.equal(await bal(0), 7000);
+
+    // Made: revert everything rev3 invested in others; rev3 gets it all back
+    res = await revert('made', 2, [r3to1, (await inv(2, 1))._id]);
+    assert.equal(res.body.reverted, 2);
+    assert.equal(res.body.refunded, 1000);
+    assert.deepEqual(res.body.refunds.map(r => [r.username, r.amount, r.balance]), [['rev3', 1000, 7000]]);
+    assert.deepEqual([await bal(0), await bal(1), await bal(2)], [7000, 7000, 7000]);
+    assert.equal(await Investment.countDocuments({ $or: [{ user: { $in: teams.map(t => t._id) } }, { pitcher: { $in: teams.map(t => t._id) } }] }), 0);
+
+    // A reverted investment can be made again
+    assert.equal((await invest(0, 2, 200)).status, 200);
+    assert.equal((await call('GET', '/api/profile', { playerToken: tok[0] })).body.balance, 6800);
+
+    await Investment.deleteMany({ user: { $in: teams.map(t => t._id) } });
+    await User.deleteMany({ _id: { $in: teams.map(t => t._id) } });
+});
+
 test('player logout ends the session on the server', async () => {
     const token = (await playerLogin('legacy', 'password')).body.jwtToken;
     assert.equal((await call('POST', '/api/auth/logout', { playerToken: token })).status, 200);
