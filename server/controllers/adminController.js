@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 const { User, Token } = require('../models/user');
 const { Investment } = require('../models/pitcher');
 const { AdminSession } = require('../models/admin');
-const { PointAward, pointTotals } = require('../models/points');
+const { PointAward, KINDS, ADD, pointTotals, multiplierTotals } = require('../models/points');
 const leaderboard = require('./leaderboard');
 const { adminConfig, ADMIN_AUDIENCE, ADMIN_TOKEN_TTL_SECONDS } = require('../middleware/adminAuth');
 const {
@@ -37,11 +37,13 @@ const toPositiveInt = (value, fallback, max) => {
 
 // Game score for every active team, computed live with the leaderboard formula:
 // 0.6 x (investment received / highest received) + 0.4 x (profit from investments / highest profit),
-// plus the team's admin points added as-is. Admin only: players never see scores. Deleted teams have no score.
+// plus the team's added points, all multiplied by its multiplier. Admin only: players never see scores.
+// Deleted teams have no score.
 const scoresFrom = (scoreboard) => Object.fromEntries(scoreboard.map((row, i) => [row.id, {
     value: row.finalScore,
     formula: row.formulaScore,
     points: row.points,
+    multiplier: row.multiplier,
     rank: i + 1,
     received: row.IR,
     profit: row.PI,
@@ -50,7 +52,7 @@ const scoresFrom = (scoreboard) => Object.fromEntries(scoreboard.map((row, i) =>
 const teamScores = async () => scoresFrom(await leaderboard.getScoreboardWithScores());
 
 // Every value that goes into one team's score, step by step, for the team details view
-const scoreCalculation = (score, board, made) => {
+const scoreCalculation = (score, board, made, multiplierCount) => {
     if (!score) return null;   // deleted teams are not scored
     const { stats, irMap } = board;
     const receivedRatio = score.received / stats.maxIR;
@@ -70,6 +72,9 @@ const scoreCalculation = (score, board, made) => {
         profitPart: stats.weights.PI * profitRatio,
         formula: score.formula,
         adminPoints: score.points,
+        beforeMultiplier: score.formula + score.points,
+        multiplier: score.multiplier,
+        multiplierCount,
         final: score.value,
         // How the profit is made up: each investment x (that team's IR / average IR)
         profitItems: made.map(inv => {
@@ -227,10 +232,12 @@ const listTeams = async (req, res) => {
 const getTeam = async (req, res) => {
     try {
         const team = await findTeam(req.params.id);
-        const [made, received, points, board] = await Promise.all([
+        const [made, received, points, multipliers, multiplierCount, board] = await Promise.all([
             Investment.find({ user: team._id }).populate('pitcher', 'name username deletedAt').lean(),
             Investment.find({ pitcher: team._id }).populate('user', 'name username deletedAt').lean(),
             pointTotals([team._id]),
+            multiplierTotals([team._id]),
+            PointAward.countDocuments({ team: team._id, revokedAt: null, kind: 'multiply' }),
             leaderboard.getScoreboard(),
         ]);
         const scores = scoresFrom(board.scoreboard);
@@ -243,10 +250,11 @@ const getTeam = async (req, res) => {
             team: {
                 ...serializeTeam(team),
                 points: points[team._id.toString()] || 0,
+                multiplier: multipliers[team._id.toString()] ?? 1,
                 score: scores[team._id.toString()] || null,
             },
             rankedTeams: Object.keys(scores).length,
-            calculation: scoreCalculation(scores[team._id.toString()], board, made),
+            calculation: scoreCalculation(scores[team._id.toString()], board, made, multiplierCount),
             investmentsMade: made.map(inv => ({ id: inv._id, amt: inv.amt, team: describe(inv.pitcher) })),
             investmentsReceived: received.map(inv => ({ id: inv._id, amt: inv.amt, team: describe(inv.user) })),
             totalInvested: made.reduce((sum, inv) => sum + inv.amt, 0),
@@ -373,20 +381,32 @@ const revertInvestments = (direction) => async (req, res) => {
 
 // --- Points ---
 
-// Bonus points sit on the same scale as the formula score (0 to 1): each entry, and a team's
-// total of active entries, must stay between -1 and 1. Decimals are allowed.
+// Bonus entries sit on the same scale as the formula score (0 to 1). Decimals are allowed.
+//   add:      each entry, and the team's total of active add entries, between -1 and 1 (not 0)
+//   multiply: each entry between -1 and 1 (0 allowed: it zeroes the score); the product of
+//             several stays within -1..1 by itself
 const MAX_POINTS = 1;
 const MAX_REASON = 120;
 const EPSILON = 1e-9;   // tolerance for floating-point sums such as 0.1 + 0.2
 
-const validatePoints = (value) => {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value === 0 || Math.abs(value) > MAX_POINTS)
-        throw new ValidationError(`Points must be a number between -${MAX_POINTS} and ${MAX_POINTS}, not 0`);
+const validateKind = (value) => {
+    if (value === undefined) return 'add';
+    if (!KINDS.includes(value)) throw new ValidationError('Kind must be "add" or "multiply"');
     return value;
 };
 
+const validatePoints = (value, kind = 'add') => {
+    const zeroOk = kind === 'multiply';
+    if (typeof value !== 'number' || !Number.isFinite(value) || (value === 0 && !zeroOk) || Math.abs(value) > MAX_POINTS)
+        throw new ValidationError(kind === 'multiply'
+            ? `Multiplier must be a number between -${MAX_POINTS} and ${MAX_POINTS}`
+            : `Points must be a number between -${MAX_POINTS} and ${MAX_POINTS}, not 0`);
+    return value;
+};
+
+// Sum of the team's active add entries (multipliers are not part of the total)
 const activeTotal = async (teamId, excludeId) => {
-    const match = { team: teamId, revokedAt: null };
+    const match = { team: teamId, revokedAt: null, ...ADD };
     if (excludeId) match._id = { $ne: excludeId };
     const [row] = await PointAward.aggregate([{ $match: match }, { $group: { _id: null, total: { $sum: '$points' } } }]);
     return row ? row.total : 0;
@@ -405,8 +425,11 @@ const validateReason = (value) => {
     return value.trim();
 };
 
+const kindOf = (award) => award.kind || 'add';
+
 const serializeAward = (award) => ({
     id: award._id,
+    kind: kindOf(award),
     points: award.points,
     reason: award.reason || '',
     createdAt: award.createdAt,
@@ -417,9 +440,11 @@ const serializeAward = (award) => ({
 
 const pointsResponse = async (team) => {
     const awards = await PointAward.find({ team: team._id }).sort({ createdAt: -1, _id: -1 });
+    const active = awards.filter(a => !a.revokedAt);
     return {
         team: serializeTeam(team),
-        total: awards.filter(a => !a.revokedAt).reduce((sum, a) => sum + a.points, 0),
+        total: active.filter(a => kindOf(a) === 'add').reduce((sum, a) => sum + a.points, 0),
+        multiplier: active.filter(a => kindOf(a) === 'multiply').reduce((product, a) => product * a.points, 1),
         awards: awards.map(serializeAward),
     };
 };
@@ -439,12 +464,15 @@ const awardPoints = async (req, res) => {
         const team = await findTeam(req.params.id);
         if (team.deletedAt) throw new ValidationError('Deleted teams cannot get points', 409);
 
-        const points = validatePoints(body.points);
+        const kind = validateKind(body.kind);
+        const points = validatePoints(body.points, kind);
         const reason = validateReason(body.reason);
-        const before = await activeTotal(team._id);
-        checkTotal(before, before + points);
+        if (kind === 'add') {
+            const before = await activeTotal(team._id);
+            checkTotal(before, before + points);
+        }
 
-        await PointAward.create({ team: team._id, points, reason });
+        await PointAward.create({ team: team._id, kind, points, reason });
         return res.status(201).json(await pointsResponse(team));
     } catch (err) {
         return sendError(res, err, 'Admin award points');
@@ -469,13 +497,17 @@ const updatePoints = async (req, res) => {
         const team = await findTeam(award.team);
         if (team.deletedAt) throw new ValidationError('Points of deleted teams cannot be changed', 409);
 
-        const points = 'points' in body ? validatePoints(body.points) : award.points;
+        // The kind can't be changed: revoke the entry and add a new one instead
+        const kind = kindOf(award);
+        const points = 'points' in body ? validatePoints(body.points, kind) : award.points;
         const reason = 'reason' in body ? validateReason(body.reason) : award.reason;
 
-        const wasActive = !award.revokedAt;
-        const willBeActive = typeof body.revoked === 'boolean' ? !body.revoked : wasActive;
-        const others = await activeTotal(team._id, award._id);
-        checkTotal(others + (wasActive ? award.points : 0), others + (willBeActive ? points : 0));
+        if (kind === 'add') {
+            const wasActive = !award.revokedAt;
+            const willBeActive = typeof body.revoked === 'boolean' ? !body.revoked : wasActive;
+            const others = await activeTotal(team._id, award._id);
+            checkTotal(others + (wasActive ? award.points : 0), others + (willBeActive ? points : 0));
+        }
 
         if (points !== award.points || reason !== award.reason) {
             award.points = points;

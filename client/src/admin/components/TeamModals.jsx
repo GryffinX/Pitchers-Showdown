@@ -318,7 +318,7 @@ function ScoreCalculation({ calc }) {
     <section className="adm-calc">
       <h3>Points calculation</h3>
       <p className="adm-muted adm-small">
-        Points = {w.IR} × (IR ÷ max IR) + {w.PI} × (profit ÷ max profit) + admin points.
+        Points = ({w.IR} × (IR ÷ max IR) + {w.PI} × (profit ÷ max profit) + added points) × multiplier.
         IR is the total investment this team received. Recalculated live from the database; only admins see it.
       </p>
 
@@ -328,7 +328,8 @@ function ScoreCalculation({ calc }) {
           <dl>
             <div><dt>IR (investment received)</dt><dd>{formatAmount(calc.received)}</dd></div>
             <div><dt>Profit from investments</dt><dd>{formatAmount(calc.profit)}</dd></div>
-            <div><dt>Admin points</dt><dd>{formatScore(calc.adminPoints)}</dd></div>
+            <div><dt>Added points</dt><dd>{formatScore(calc.adminPoints)}</dd></div>
+            <div><dt>Multiplier</dt><dd>×{formatScore(calc.multiplier)}</dd></div>
           </dl>
         </div>
         <div className="adm-calc-group">
@@ -357,15 +358,29 @@ function ScoreCalculation({ calc }) {
               <td className="adm-right">{formatScore(calc.profitPart)}</td>
             </tr>
             <tr>
-              <td>Admin points</td>
-              <td className="adm-muted adm-small">added as they are (revoked points don&apos;t count)</td>
+              <td>Added points</td>
+              <td className="adm-muted adm-small">added as they are (revoked entries don&apos;t count)</td>
               <td className="adm-right">{formatScore(calc.adminPoints)}</td>
+            </tr>
+            <tr className="adm-calc-subtotal">
+              <td>Before multiplier</td>
+              <td className="adm-mono adm-small">{formatScore(calc.receivedPart)} + {formatScore(calc.profitPart)} + {formatScore(calc.adminPoints)}</td>
+              <td className="adm-right">{formatScore(calc.beforeMultiplier)}</td>
+            </tr>
+            <tr>
+              <td>Multiplier</td>
+              <td className="adm-muted adm-small">
+                {calc.multiplierCount === 0
+                  ? 'none given, so ×1'
+                  : calc.multiplierCount === 1 ? '1 multiply entry' : `${calc.multiplierCount} multiply entries, multiplied together`}
+              </td>
+              <td className="adm-right">×{formatScore(calc.multiplier)}</td>
             </tr>
           </tbody>
           <tfoot>
             <tr>
               <td className="adm-strong">Total points</td>
-              <td className="adm-mono adm-small">{formatScore(calc.receivedPart)} + {formatScore(calc.profitPart)} + {formatScore(calc.adminPoints)}</td>
+              <td className="adm-mono adm-small">{formatScore(calc.beforeMultiplier)} × {formatScore(calc.multiplier)}</td>
               <td className="adm-right adm-calc-final" title={String(calc.final)}>{formatScore(calc.final)}</td>
             </tr>
           </tfoot>
@@ -604,7 +619,7 @@ export function TeamDetailsModal({ teamId, onClose, onRevert }) {
           </dl>
           {data.calculation
             ? <ScoreCalculation calc={data.calculation} />
-            : <div className="adm-alert adm-alert-info adm-calc-gap">Deleted teams are not scored. Admin points on record: {formatScore(data.team.points || 0)}.</div>}
+            : <div className="adm-alert adm-alert-info adm-calc-gap">Deleted teams are not scored. On record: {formatScore(data.team.points || 0)} added points, multiplier ×{formatScore(data.team.multiplier ?? 1)}.</div>}
           <div className="adm-grid-2 adm-grid-tight">
             <section>
               <div className="adm-section-head">
@@ -632,16 +647,29 @@ export function TeamDetailsModal({ teamId, onClose, onRevert }) {
 }
 
 // Mirrors the limits in server/controllers/adminController.js
-// Bonus points use the formula's 0-1 scale: each entry and a team's total stay between -1 and 1
+// Bonus entries use the formula's 0-1 scale. Mirrors server/controllers/adminController.js:
+//   add:      -1 to 1, not 0; the team's total of add entries also stays within -1..1
+//   multiply: -1 to 1 (0 allowed); final = (formula + added points) x product of multipliers
 const MAX_POINTS = 1;
 const MAX_REASON = 120;
-const checkPoints = (text) => {
+const KIND_LABEL = { add: 'Add', multiply: 'Multiply' };
+const checkPoints = (text, kind) => {
   const n = Number(text);
+  if (kind === 'multiply') {
+    if (text.trim() === '' || !Number.isFinite(n) || Math.abs(n) > MAX_POINTS)
+      return `Enter a multiplier between -${MAX_POINTS} and ${MAX_POINTS} (e.g. 0.5 halves the score).`;
+    return '';
+  }
   if (text.trim() === '' || !Number.isFinite(n) || n === 0 || Math.abs(n) > MAX_POINTS)
     return `Enter a number between -${MAX_POINTS} and ${MAX_POINTS}, not 0 (e.g. 0.25 or -0.5).`;
   return '';
 };
 const formatPoints = (n) => `${n > 0 ? '+' : ''}${formatScore(n)}`;
+const formatEntry = (kind, n) => (kind === 'multiply' ? `×${formatScore(n)}` : formatPoints(n));
+const entryClass = (kind, n) => {
+  if (kind === 'multiply') return n >= 1 ? 'adm-points-plus' : 'adm-points-minus';
+  return n > 0 ? 'adm-points-plus' : 'adm-points-minus';
+};
 
 function PointsRow({ award, editable, busy, onSave, onToggle }) {
   const [editing, setEditing] = useState(false);
@@ -658,7 +686,7 @@ function PointsRow({ award, editable, busy, onSave, onToggle }) {
 
   const save = async (e) => {
     e.preventDefault();
-    const pointsError = checkPoints(points);
+    const pointsError = checkPoints(points, award.kind);
     if (pointsError) return setError(pointsError);
     if (await onSave(award, { points: Number(points), reason: reason.trim() }, setError)) setEditing(false);
   };
@@ -666,9 +694,10 @@ function PointsRow({ award, editable, busy, onSave, onToggle }) {
   if (editing) {
     return (
       <tr>
-        <td colSpan={4}>
+        <td colSpan={5}>
           <form className="adm-points-edit" onSubmit={save} noValidate>
-            <input className="adm-input adm-points-input" type="number" step="any" min={-MAX_POINTS} max={MAX_POINTS} value={points} onChange={e => setPoints(e.target.value)} disabled={busy} aria-label="Points" autoFocus />
+            <span className={`adm-kind adm-kind-${award.kind}`}>{KIND_LABEL[award.kind]}</span>
+            <input className="adm-input adm-points-input" type="number" step="any" min={-MAX_POINTS} max={MAX_POINTS} value={points} onChange={e => setPoints(e.target.value)} disabled={busy} aria-label={award.kind === 'multiply' ? 'Multiplier' : 'Points'} autoFocus />
             <input className="adm-input" value={reason} maxLength={MAX_REASON} onChange={e => setReason(e.target.value)} disabled={busy} placeholder="Reason (optional)" aria-label="Reason" />
             <button className="adm-btn adm-btn-primary adm-btn-sm" type="submit" disabled={busy}>Save</button>
             <button className="adm-btn adm-btn-ghost adm-btn-sm" type="button" onClick={() => setEditing(false)} disabled={busy}>Cancel</button>
@@ -681,7 +710,8 @@ function PointsRow({ award, editable, busy, onSave, onToggle }) {
 
   return (
     <tr className={award.revoked ? 'adm-points-revoked' : ''}>
-      <td className={`adm-nowrap adm-strong ${award.points > 0 ? 'adm-points-plus' : 'adm-points-minus'}`}>{formatPoints(award.points)}</td>
+      <td><span className={`adm-kind adm-kind-${award.kind}`}>{KIND_LABEL[award.kind]}</span></td>
+      <td className={`adm-nowrap adm-strong ${entryClass(award.kind, award.points)}`}>{formatEntry(award.kind, award.points)}</td>
       <td>
         {award.reason || <span className="adm-muted">No reason given</span>}
         {award.revoked && <span className="adm-badge adm-badge-failure adm-badge-inline">revoked</span>}
@@ -704,11 +734,12 @@ function PointsRow({ award, editable, busy, onSave, onToggle }) {
   );
 }
 
-// Give or take points by hand. Every entry can be edited, revoked (no longer counted) and restored.
+// Give or take points by hand, or multiply the score. Every entry can be edited, revoked (no longer counted) and restored.
 export function PointsModal({ team, onClose }) {
   const notify = useToast();
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState('');
+  const [kind, setKind] = useState('add');
   const [points, setPoints] = useState('');
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
@@ -722,13 +753,15 @@ export function PointsModal({ team, onClose }) {
 
   const add = async (e) => {
     e.preventDefault();
-    const pointsError = checkPoints(points);
+    const pointsError = checkPoints(points, kind);
     if (pointsError) return setError(pointsError);
     setBusy(true);
     setError('');
     try {
-      apply(await adminRequest(`/teams/${team.id}/points`, { method: 'POST', body: { points: Number(points), reason: reason.trim() } }));
-      notify(`${formatPoints(Number(points))} points for “${team.name}”`);
+      apply(await adminRequest(`/teams/${team.id}/points`, { method: 'POST', body: { kind, points: Number(points), reason: reason.trim() } }));
+      notify(kind === 'multiply'
+        ? `Score of “${team.name}” multiplied by ${formatScore(Number(points))}`
+        : `${formatPoints(Number(points))} points for “${team.name}”`);
       setPoints('');
       setReason('');
     } catch (err) {
@@ -757,12 +790,17 @@ export function PointsModal({ team, onClose }) {
     setError('');
     try {
       apply(await adminRequest(`/points/${award.id}`, { method: 'PATCH', body: { revoked } }));
-      notify(`${revoked ? 'Revoked' : 'Restored'} ${formatPoints(award.points)} points`);
+      notify(`${revoked ? 'Revoked' : 'Restored'} ${formatEntry(award.kind, award.points)}`);
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const chooseKind = (next) => {
+    setKind(next);
+    setError('');
   };
 
   const editable = team.status === 'active';
@@ -775,22 +813,39 @@ export function PointsModal({ team, onClose }) {
           <div className="adm-muted">{team.username}</div>
         </div>
         <div className="adm-points-total">
-          <span className="adm-muted adm-small">Admin points</span>
-          <strong>{data ? formatScore(data.total) : '—'}</strong>
+          <span className="adm-muted adm-small">Added points</span>
+          <strong>{data ? formatPoints(data.total) : '—'}</strong>
+        </div>
+        <div className="adm-points-total">
+          <span className="adm-muted adm-small">Multiplier</span>
+          <strong>{data ? `×${formatScore(data.multiplier)}` : '—'}</strong>
         </div>
       </div>
+      <p className="adm-muted adm-small adm-points-formula">Points = (formula + added points) × multiplier</p>
 
       {editable ? (
         <form className="adm-points-add" onSubmit={add} noValidate>
+          <div className="adm-field">
+            <span>Type</span>
+            <div className="adm-segmented" role="radiogroup" aria-label="Entry type">
+              {['add', 'multiply'].map(k => (
+                <button key={k} type="button" role="radio" aria-checked={kind === k} className={kind === k ? 'active' : ''} onClick={() => chooseKind(k)} disabled={busy || !data}>
+                  {KIND_LABEL[k]}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="adm-field">
-            <span>Points <em className="adm-muted">-1 to 1, negative takes away</em></span>
-            <input className="adm-input adm-points-input" type="number" step="any" min={-MAX_POINTS} max={MAX_POINTS} placeholder="e.g. 0.25" value={points} onChange={e => setPoints(e.target.value)} disabled={busy || !data} autoFocus />
+            <span>{kind === 'multiply' ? 'Multiply by' : 'Points'} <em className="adm-muted">{kind === 'multiply' ? '-1 to 1' : '-1 to 1, negative takes away'}</em></span>
+            <input className="adm-input adm-points-input" type="number" step="any" min={-MAX_POINTS} max={MAX_POINTS} placeholder={kind === 'multiply' ? 'e.g. 0.5' : 'e.g. 0.25'} value={points} onChange={e => setPoints(e.target.value)} disabled={busy || !data} autoFocus />
           </label>
           <label className="adm-field adm-points-reason">
             <span>Reason <em className="adm-muted">optional</em></span>
             <input className="adm-input" placeholder="e.g. Best pitch, round 1" value={reason} maxLength={MAX_REASON} onChange={e => setReason(e.target.value)} disabled={busy || !data} />
           </label>
-          <button className="adm-btn adm-btn-primary" type="submit" disabled={busy || !data}>{busy ? 'Saving…' : 'Add points'}</button>
+          <button className="adm-btn adm-btn-primary" type="submit" disabled={busy || !data}>
+            {busy ? 'Saving…' : kind === 'multiply' ? 'Add multiplier' : 'Add points'}
+          </button>
         </form>
       ) : (
         <div className="adm-alert adm-alert-info">This team is deleted, so its points can be viewed but not changed.</div>
@@ -803,7 +858,7 @@ export function PointsModal({ team, onClose }) {
       ) : (
         <div className="adm-table-wrap">
           <table className="adm-table adm-table-compact">
-            <thead><tr><th>Points</th><th>Reason</th><th>Added</th><th className="adm-right">Actions</th></tr></thead>
+            <thead><tr><th>Type</th><th>Value</th><th>Reason</th><th>Added</th><th className="adm-right">Actions</th></tr></thead>
             <tbody>
               {data.awards.map(award => (
                 <PointsRow key={award.id} award={award} editable={editable} busy={busy} onSave={save} onToggle={toggle} />
@@ -812,7 +867,10 @@ export function PointsModal({ team, onClose }) {
           </table>
         </div>
       )}
-      <p className="adm-muted adm-small adm-points-note">Each entry and the team&apos;s total stay between -1 and 1. Revoked entries stay in the history but don&apos;t count towards the total. Restore one to count it again.</p>
+      <p className="adm-muted adm-small adm-points-note">
+        Every value is between -1 and 1. Added points are summed and their total also stays between -1 and 1.
+        Several multipliers multiply together (0.5 and 0.5 make 0.25). Revoked entries stay in the history but don&apos;t count; restore one to count it again.
+      </p>
     </Modal>
   );
 }

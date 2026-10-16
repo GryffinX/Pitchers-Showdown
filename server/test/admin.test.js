@@ -396,6 +396,61 @@ test('admin awards points that can be edited, revoked and restored', async () =>
     await User.deleteOne({ _id: team._id });
 });
 
+test('multiply entries scale (formula + added points), with the same -1..1 range', async () => {
+    const team = await new User({ username: 'multi', name: 'Multi', password: 'password', desc: ' ', ppt: ' ' }).save();
+    const award = (body) => call('POST', `/api/admin/teams/${team._id}/points`, { token: adminToken, body });
+    const edit = (id, body) => call('PATCH', `/api/admin/points/${id}`, { token: adminToken, body });
+    const details = async () => (await call('GET', `/api/admin/teams/${team._id}`, { token: adminToken })).body;
+    const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} vs ${b}`);
+
+    const formula = (await details()).team.score.formula;
+    assert.equal((await details()).team.score.multiplier, 1, 'no multiplier means x1');
+
+    // Validation: value -1..1 (0 allowed for multiply), known kinds only, kind can't be edited
+    for (const body of [{ kind: 'multiply', points: 1.5 }, { kind: 'multiply', points: -1.01 }, { kind: 'multiply', points: '0.5' }, { kind: 'divide', points: 0.5 }])
+        assert.equal((await award(body)).status, 400, JSON.stringify(body));
+
+    assert.equal((await award({ points: 0.2, reason: 'Bonus' })).status, 201);   // kind defaults to add
+    let res = await award({ kind: 'multiply', points: 0.5, reason: 'Half' });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.awards[0].kind, 'multiply');
+    assert.equal(res.body.awards[1].kind, 'add');
+    near(res.body.total, 0.2, 'total counts add entries only');
+    near(res.body.multiplier, 0.5, 'multiplier');
+    near((await details()).team.score.value, (formula + 0.2) * 0.5, '(formula + added) x multiplier');
+
+    // Several multipliers multiply together; a negative one flips the sign
+    res = await award({ kind: 'multiply', points: -1 });
+    near(res.body.multiplier, -0.5, 'product');
+    near((await details()).team.score.value, (formula + 0.2) * -0.5, 'negative');
+    const minusOne = res.body.awards[0];
+    assert.equal((await edit(minusOne.id, { kind: 'add' })).status, 400, 'kind cannot be edited');
+
+    // Revoke / restore / edit work as for added points
+    res = await edit(minusOne.id, { revoked: true });
+    near(res.body.multiplier, 0.5, 'after revoke');
+    res = await edit(minusOne.id, { revoked: false, points: 0 });
+    assert.equal(res.status, 200);
+    near(res.body.multiplier, 0, 'x0 is allowed');
+    near((await details()).team.score.value, 0, 'zeroed');
+    res = await edit(minusOne.id, { points: 0.8 });
+    near(res.body.multiplier, 0.4, '0.5 x 0.8');
+
+    // The -1..1 limit on the added total ignores multipliers
+    assert.equal((await award({ points: 0.8 })).status, 201);
+    assert.equal((await award({ points: 0.1 })).status, 400);
+
+    // The details view shows the steps
+    const d = await details();
+    near(d.calculation.beforeMultiplier, formula + 1, 'before multiplier');
+    near(d.calculation.multiplier, 0.4, 'multiplier in calculation');
+    assert.equal(d.calculation.multiplierCount, 2);
+    near(d.calculation.final, (formula + 1) * 0.4, 'final');
+    near(d.team.score.value, d.calculation.final, 'same value everywhere');
+
+    await User.deleteOne({ _id: team._id });
+});
+
 test('admin team list and details show the live score from the leaderboard formula', async () => {
     const teams = [];
     for (const n of [1, 2, 3]) teams.push(await new User({ username: `score${n}`, name: `Score ${n}`, password: 'password', desc: ' ', ppt: ' ' }).save());

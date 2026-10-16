@@ -2,9 +2,9 @@
 
 const { User } = require('../models/user');
 const { Investment } = require('../models/pitcher'); // change path if model is in different file
-const { pointTotals } = require('../models/points');
+const { pointTotals, multiplierTotals } = require('../models/points');
 
-// score = 0.6 x (IR / max IR) + 0.4 x (PI / max PI) + admin points
+// score = (0.6 x (IR / max IR) + 0.4 x (PI / max PI) + added points) x multiplier
 const WEIGHTS = { IR: 0.6, PI: 0.4 };
 
 class ControlBoard {
@@ -80,8 +80,10 @@ class ControlBoard {
         const maxIR = Math.max(...Object.values(irMap), 1);
         const maxPI = Math.max(...Object.values(piMap), 1);
 
-        // points given by admins (revoked ones excluded) are added as-is, not weighted
-        const pointsMap = await pointTotals(users.map(u => u._id));
+        // bonus from admins (revoked entries excluded): added points are added as-is, not weighted,
+        // then the total is multiplied by the team's multiplier (x1 when it has none)
+        const teamIds = users.map(u => u._id);
+        const [pointsMap, multiplierMap] = await Promise.all([pointTotals(teamIds), multiplierTotals(teamIds)]);
 
         // final scoreboard array
         let scoreboard = users.map(u => {
@@ -90,6 +92,7 @@ class ControlBoard {
             const PI = piMap[id];
             const formulaScore = (WEIGHTS.IR * (IR / maxIR)) + (WEIGHTS.PI * (PI / maxPI));
             const points = pointsMap[id] || 0;
+            const multiplier = multiplierMap[id] ?? 1;
 
             return {
                 id,
@@ -100,7 +103,8 @@ class ControlBoard {
                 PI,
                 formulaScore,
                 points,
-                finalScore: formulaScore + points
+                multiplier,
+                finalScore: (formulaScore + points) * multiplier
             };
         });
 
